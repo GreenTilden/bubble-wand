@@ -1,0 +1,13 @@
+# SECRET — the bearer token lives here. NEVER commit it.
+clawatch.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# OS
+.DS_Store

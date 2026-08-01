@@ -1,0 +1,23 @@
+# systemd USER unit — install to ~/.config/systemd/user/clawatch-bridge.service
+# Runs as the user that owns the `dev` tmux group so capture-pane/send-keys see
+# the right tmux server socket (via that user's $XDG_RUNTIME_DIR).
+#
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now clawatch-bridge
+#   loginctl enable-linger $USER      # keep it running without an active login
+#
+[Unit]
+Description=clawatch-bridge (tmux HTTP bridge for the wrist co-pilot)
+After=default.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/clawatch-bridge
+# Token + host/port/window live here (chmod 600, not committed).
+EnvironmentFile=%h/clawatch-bridge/clawatch.env
+ExecStart=%h/clawatch-bridge/.venv/bin/uvicorn clawatch_bridge.main:app --host ${CLAWATCH_HOST} --port ${CLAWATCH_PORT}
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
