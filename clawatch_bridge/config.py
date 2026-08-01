@@ -48,9 +48,10 @@ class Settings:
         self.env_file: str = os.getenv(
             "CLAWATCH_ENV_FILE", os.path.expanduser("~/clawatch-bridge/clawatch.env")
         )
-        # One-time token gating /setup: minted fresh each boot, only meaningful
-        # while UNCONFIGURED, printed to the log at startup, never persisted.
-        self.setup_token: str = secrets.token_urlsafe(16)
+        # One-time code gating /setup: taken from CLAWATCH_SETUP_TOKEN if the
+        # installer set one (so it can print a ready-to-open URL), else minted
+        # fresh each boot. Only meaningful while UNCONFIGURED; inert after.
+        self.setup_token: str = os.getenv("CLAWATCH_SETUP_TOKEN") or secrets.token_urlsafe(16)
         # Onboarding is LAN/loopback-only by default; escape hatch for odd nets.
         self.allow_remote_setup: bool = os.getenv(
             "CLAWATCH_ALLOW_REMOTE_SETUP", ""
