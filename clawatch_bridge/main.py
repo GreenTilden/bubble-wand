@@ -22,6 +22,7 @@ from .models import (
     SendRequest,
     SendResponse,
     SuggestResponse,
+    UsageResponse,
     TailResponse,
     Thread,
     ThreadsResponse,
@@ -128,3 +129,8 @@ async def post_suggest(index: int) -> SuggestResponse:
         raise HTTPException(status_code=502, detail=str(e))
     parsed = tmux.parse_prompt(captured)
     return SuggestResponse(suggestions=suggest.generate_suggestions(captured, parsed))
+
+
+@app.get("/api/usage", response_model=UsageResponse, dependencies=[Depends(require_token)])
+async def get_usage() -> UsageResponse:
+    return UsageResponse(**suggest.get_usage())

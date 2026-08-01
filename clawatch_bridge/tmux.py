@@ -28,6 +28,10 @@ _NEEDS_INPUT_GLYPHS = set("✳✻✽✶✷✵✴❋✱✲✧✦✺✹✸*")
 _BORDER_EXTRA = set("-—–_=│ ")
 # A numbered menu option, optionally preceded by the selection cursor "❯"/">".
 _OPTION_RE = re.compile(r"^\s*([❯>])?\s*(\d+)\.\s+(\S.*)$")
+# Claude Code status bar, e.g. "Opus 4.8 · ▓▓▓ 311k ctx HARD · $22.12".
+_STATUS_TOKENS_RE = re.compile(r"([\d.]+)\s*([kmKM]?)\s*ctx")
+_STATUS_TIER_RE = re.compile(r"ctx\s+([A-Za-z]+)")
+_STATUS_COST_RE = re.compile(r"\$\s*([\d.]+)")
 
 
 class TmuxError(Exception):
@@ -183,6 +187,39 @@ def _pane_target(index: int) -> str:
     return f"{settings.tmux_window}.{index}"
 
 
+def parse_status(lines: list[str]) -> dict | None:
+    """Parse Claude Code's status bar (model · ▓ Nk ctx TIER · $X.XX) into
+    structured fields for the watch's per-thread meter. Fail-soft: returns None
+    if there is no status bar or it can't be parsed (format drift must never
+    break capture).
+    """
+    for ln in lines:
+        t = ln.strip()
+        if "·" not in t or "ctx" not in t:
+            continue
+        m = _STATUS_TOKENS_RE.search(t)
+        if not m:
+            continue
+        try:
+            n = float(m.group(1))
+        except ValueError:
+            continue
+        suffix = m.group(2).lower()
+        if suffix == "k":
+            tokens = int(n * 1_000)
+        elif suffix == "m":
+            tokens = int(n * 1_000_000)
+        else:
+            tokens = int(n)
+        model = t.split("·", 1)[0].strip() or None
+        tier_m = _STATUS_TIER_RE.search(t)
+        tier = tier_m.group(1) if tier_m else None
+        cost_m = _STATUS_COST_RE.search(t)
+        cost = float(cost_m.group(1)) if cost_m else None
+        return {"model": model, "ctxTokens": tokens, "ctxTier": tier, "costUsd": cost}
+    return None
+
+
 def list_threads() -> list[dict]:
     out = _run(
         [
@@ -207,8 +244,11 @@ def list_threads() -> list[dict]:
         # (whatever the spinner glyph reads) AND flag it as tappable so the watch can
         # distinguish "answer by tapping" from "needs dictated input".
         has_prompt = False
+        meter: dict | None = None
         try:
-            if parse_prompt(_do_capture(f"{settings.tmux_window}.{idx}", 25, False, True)):
+            raw = _do_capture(f"{settings.tmux_window}.{idx}", 25, False, False)
+            meter = parse_status(raw)
+            if parse_prompt(_clean_tail(raw)):
                 has_prompt = True
                 status = "NEEDS_INPUT"
         except TmuxError:
@@ -223,6 +263,10 @@ def list_threads() -> list[dict]:
                 "title": title,
                 "label": label,
                 "hasPrompt": has_prompt,
+                "model": (meter or {}).get("model"),
+                "ctxTokens": (meter or {}).get("ctxTokens"),
+                "ctxTier": (meter or {}).get("ctxTier"),
+                "costUsd": (meter or {}).get("costUsd"),
             }
         )
     return threads

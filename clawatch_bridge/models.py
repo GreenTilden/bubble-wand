@@ -15,6 +15,11 @@ class Thread(BaseModel):
     title: str
     label: str
     hasPrompt: bool = False  # an interactive menu is on screen (tappable, no dictation)
+    # Claude Code status-bar meter, recovered from the pane status line; null when absent.
+    model: str | None = None
+    ctxTokens: int | None = None
+    ctxTier: str | None = None
+    costUsd: float | None = None
 
 
 class ThreadsResponse(BaseModel):
@@ -57,3 +62,10 @@ class SendResponse(BaseModel):
 
 class SuggestResponse(BaseModel):
     suggestions: list[str] = []
+
+
+class UsageResponse(BaseModel):
+    calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    estimated_cost_usd: float = 0.0

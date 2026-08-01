@@ -10,12 +10,17 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 
 from .config import settings
 
 log = logging.getLogger("clawatch.suggest")
 
 _client = None  # lazily built; None while suggest is disabled or pkg missing
+
+# Cumulative Haiku usage for the co-pilot itself (in-memory; resets on restart).
+_usage_lock = threading.Lock()
+_usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0}
 
 SYSTEM_PROMPT = (
     "You are a wrist co-pilot. A developer is supervising a Claude Code coding "
@@ -81,6 +86,11 @@ def generate_suggestions(cleaned: list[str], prompt: dict | None) -> list[str]:
         log.warning("suggest: anthropic call failed: %s", e)
         return []
 
+    try:
+        _record_usage(msg.usage)
+    except Exception:  # noqa: BLE001 -- usage accounting must never break suggest
+        pass
+
     text = "".join(b.text for b in msg.content if b.type == "text").strip()
     return _parse(text)
 
@@ -99,3 +109,24 @@ def _parse(text: str) -> list[str]:
             if t:
                 out.append(t)
     return [s[:60] for s in out][:3]  # cap length + count (2-3)
+
+
+def _record_usage(usage) -> None:
+    with _usage_lock:
+        _usage["calls"] += 1
+        _usage["input_tokens"] += int(getattr(usage, "input_tokens", 0) or 0)
+        _usage["output_tokens"] += int(getattr(usage, "output_tokens", 0) or 0)
+
+
+def get_usage() -> dict:
+    with _usage_lock:
+        calls = _usage["calls"]
+        it = _usage["input_tokens"]
+        ot = _usage["output_tokens"]
+    cost = it / 1e6 * settings.suggest_price_in + ot / 1e6 * settings.suggest_price_out
+    return {
+        "calls": calls,
+        "input_tokens": it,
+        "output_tokens": ot,
+        "estimated_cost_usd": round(cost, 4),
+    }

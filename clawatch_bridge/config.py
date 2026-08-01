@@ -33,6 +33,8 @@ class Settings:
         self.suggest_max_tokens: int = int(os.getenv("CLAWATCH_SUGGEST_MAX_TOKENS", "150"))
         self.suggest_timeout: float = float(os.getenv("CLAWATCH_SUGGEST_TIMEOUT", "6"))
         self.suggest_tail_lines: int = int(os.getenv("CLAWATCH_SUGGEST_TAIL_LINES", "40"))
+        self.suggest_price_in: float = float(os.getenv("CLAWATCH_SUGGEST_PRICE_IN", "1.0"))
+        self.suggest_price_out: float = float(os.getenv("CLAWATCH_SUGGEST_PRICE_OUT", "5.0"))
 
         # Bearer token. If unset, generate one and log it at startup so local
         # testing "just works"; in production pass CLAWATCH_TOKEN explicitly.
