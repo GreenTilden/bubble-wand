@@ -141,28 +141,58 @@ def parse_prompt(cleaned: list[str]) -> dict | None:
     """Detect a Claude Code interactive menu in already-cleaned tail lines.
 
     Returns {"question": str, "options": [{"key","label","selected"}]} or None.
-    Requires the selection cursor "❯" on at least one numbered option, so plain
-    numbered lists inside an assistant message are NOT treated as a prompt.
+    Requires the selection cursor "❯" on a numbered option. Only the contiguous
+    menu block anchored by that cursor is captured — numbered lists elsewhere in
+    the tail (e.g. inside a plan, which often has several) are NOT swept in. Doing
+    so previously produced bogus/duplicate options: duplicate option keys crash the
+    watch's LazyColumn, and stray plan bullets would send the wrong digit on tap.
     """
-    options: list[dict] = []
-    first_opt_idx: int | None = None
+    # Every numbered-option line, with its position in the tail.
+    matches: list[tuple[int, dict]] = []
     for i, ln in enumerate(cleaned):
         m = _OPTION_RE.match(ln)
-        if not m:
-            continue
-        if first_opt_idx is None:
-            first_opt_idx = i
-        options.append(
-            {
-                "key": m.group(2),
-                "label": m.group(3).strip(),
-                "selected": m.group(1) == "❯",
-            }
-        )
-    if not options or not any(o["selected"] for o in options):
+        if m:
+            matches.append(
+                (
+                    i,
+                    {
+                        "key": m.group(2),
+                        "label": m.group(3).strip(),
+                        "selected": m.group(1) == "❯",
+                    },
+                )
+            )
+    # The live menu is anchored by the cursor; without one there is no prompt.
+    sel = next((p for p, (_, o) in enumerate(matches) if o["selected"]), None)
+    if sel is None:
         return None
+
+    # Expand from the cursor across the contiguous run of option lines — adjacent
+    # matches separated only by blank lines. Any non-blank line between two numbered
+    # lines (plan prose, the question) breaks the run, so plan bullets stay out.
+    def _only_blank_between(a: int, b: int) -> bool:
+        return all(not cleaned[k].strip() for k in range(a + 1, b))
+
+    lo = hi = sel
+    while lo > 0 and _only_blank_between(matches[lo - 1][0], matches[lo][0]):
+        lo -= 1
+    while hi < len(matches) - 1 and _only_blank_between(matches[hi][0], matches[hi + 1][0]):
+        hi += 1
+
+    block = matches[lo : hi + 1]
+    first_opt_idx = block[0][0]
+
+    # Dedupe by key (belt-and-suspenders; a real menu already has unique digits).
+    options: list[dict] = []
+    seen: set[str] = set()
+    for _, o in block:
+        if o["key"] in seen:
+            continue
+        seen.add(o["key"])
+        options.append(o)
+
     question = ""
-    for j in range((first_opt_idx or 0) - 1, -1, -1):
+    for j in range(first_opt_idx - 1, -1, -1):
         if cleaned[j].strip():
             question = cleaned[j].strip()
             break
