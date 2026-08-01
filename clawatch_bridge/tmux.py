@@ -202,6 +202,17 @@ def list_threads() -> list[dict]:
         command = parts[1] if len(parts) > 1 else ""
         title = parts[2] if len(parts) > 2 else ""
         glyph, status, label = _derive_status(title)
+        # Tail-based prompt detection beats the title glyph: if a pane is parked at
+        # an interactive menu, surface it as NEEDS_INPUT so it's never hidden
+        # (whatever the spinner glyph reads) AND flag it as tappable so the watch can
+        # distinguish "answer by tapping" from "needs dictated input".
+        has_prompt = False
+        try:
+            if parse_prompt(_do_capture(f"{settings.tmux_window}.{idx}", 25, False, True)):
+                has_prompt = True
+                status = "NEEDS_INPUT"
+        except TmuxError:
+            pass
         threads.append(
             {
                 "index": idx,
@@ -211,13 +222,14 @@ def list_threads() -> list[dict]:
                 "glyph": glyph,
                 "title": title,
                 "label": label,
+                "hasPrompt": has_prompt,
             }
         )
     return threads
 
 
-def capture(index: int, lines: int, scrollback: bool, clean: bool = True) -> list[str]:
-    target = _pane_target(index)
+def _do_capture(target: str, lines: int, scrollback: bool, clean: bool) -> list[str]:
+    """Capture a pane by its already-built target (no re-validation)."""
     args = ["capture-pane", "-p", "-t", target]
     if scrollback:
         args += ["-S", "-"]  # from the start of the scrollback buffer
@@ -228,6 +240,31 @@ def capture(index: int, lines: int, scrollback: bool, clean: bool = True) -> lis
     if clean:
         captured = _clean_tail(captured)
     return captured
+
+
+def capture(index: int, lines: int, scrollback: bool, clean: bool = True) -> list[str]:
+    target = _pane_target(index)
+    return _do_capture(target, lines, scrollback, clean)
+
+
+# Fixed allowlist of control keys the watch may send. The client sends only the
+# action name; the actual tmux key string is chosen here, so no user-controlled
+# string ever reaches send-keys as a key name.
+_KEY_MAP: dict[str, list[str]] = {
+    "escape": ["Escape"],     # dismiss a menu / cancel
+    "interrupt": ["C-c"],     # stop a running command
+    "clear": ["C-u"],         # clear the current input line
+    "enter": ["Enter"],       # bare submit
+}
+
+
+def send_key(index: int, action: str) -> None:
+    """Send a single allowlisted control key to a pane."""
+    keys = _KEY_MAP.get(action)
+    if keys is None:
+        raise ValueError(f"unknown key action: {action!r}")
+    target = _pane_target(index)
+    _run(["send-keys", "-t", target, *keys])
 
 
 def send(index: int, text: str, submit: bool) -> None:

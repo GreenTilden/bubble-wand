@@ -14,6 +14,7 @@ class Thread(BaseModel):
     glyph: str
     title: str
     label: str
+    hasPrompt: bool = False  # an interactive menu is on screen (tappable, no dictation)
 
 
 class ThreadsResponse(BaseModel):
@@ -43,6 +44,11 @@ class TailResponse(BaseModel):
 class SendRequest(BaseModel):
     text: str = Field(default="", max_length=settings.max_send_len)
     submit: bool = True
+
+
+class KeyRequest(BaseModel):
+    # Validated server-side against a fixed allowlist — never a raw key name.
+    action: str  # escape | interrupt | clear | enter
 
 
 class SendResponse(BaseModel):

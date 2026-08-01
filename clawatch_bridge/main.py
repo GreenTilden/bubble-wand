@@ -17,6 +17,7 @@ from . import tmux
 from .config import settings
 from .auth import require_token
 from .models import (
+    KeyRequest,
     PromptInfo,
     SendRequest,
     SendResponse,
@@ -91,6 +92,23 @@ async def post_send(index: int, body: SendRequest) -> SendResponse:
         tmux.send(index, text=body.text, submit=body.submit)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except tmux.TmuxError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return SendResponse(ok=True)
+
+
+@app.post(
+    "/api/threads/{index}/key",
+    response_model=SendResponse,
+    dependencies=[Depends(require_token)],
+)
+async def post_key(index: int, body: KeyRequest) -> SendResponse:
+    try:
+        tmux.send_key(index, action=body.action)
+    except ValueError as e:
+        # bad index (404) vs bad action (400)
+        code = 400 if "action" in str(e) else 404
+        raise HTTPException(status_code=code, detail=str(e))
     except tmux.TmuxError as e:
         raise HTTPException(status_code=502, detail=str(e))
     return SendResponse(ok=True)
