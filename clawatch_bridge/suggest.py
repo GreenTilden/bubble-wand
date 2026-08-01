@@ -1,9 +1,9 @@
 """LLM-backed momentum suggestions for the wrist co-pilot.
 
 Isolated from FastAPI and tmux: reads a cleaned tail (and optional parsed prompt)
-and returns 2-3 ultra-short, always-on-our-side candidate replies. Every failure
-mode -- missing key, missing package, timeout, rate limit, malformed output --
-returns [] so the watch degrades gracefully to its static quick-reply row.
+and returns 2-3 short, always-on-our-side candidate replies. Every failure mode --
+missing key, missing package, timeout, rate limit, malformed output -- returns []
+so the watch degrades gracefully to its static quick-reply row.
 """
 from __future__ import annotations
 
@@ -25,22 +25,27 @@ _usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0}
 SYSTEM_PROMPT = (
     "You are a wrist co-pilot. A developer is supervising a Claude Code coding "
     "agent from a smartwatch and needs to reply with one tap. Given the recent "
-    "terminal output (and any on-screen menu), produce 2-3 ULTRA-SHORT candidate "
-    "replies.\n"
+    "terminal output (and any on-screen menu), produce 2-3 candidate replies.\n"
     "\n"
     "Rules:\n"
-    "- Each reply is at most ~6 words. No preamble.\n"
-    "- Bias toward momentum: prefer approve / continue / proceed / \"yes go "
-    "ahead\" / \"ship it\" -- the developer is on the agent's side and wants "
-    "forward progress -- while staying context-appropriate. If it is a genuine "
-    "either/or, still lead with the option that keeps work moving.\n"
-    "- If the agent hit an error or is blocked, offer a terse unblock (\"try "
-    "again\", \"skip that\", \"use X instead\") rather than a vague \"ok\".\n"
-    "- If several prompts or questions are stacked on screen, answer ONLY the "
-    "most recent (bottom-most) one. Never bundle answers to multiple questions "
-    "into a single reply.\n"
-    "- Output ONLY a JSON array of strings, e.g. [\"yes go ahead\",\"continue\","
-    "\"explain first\"]. No keys, no markdown, no commentary."
+    "- Each reply is a short, natural phrase — roughly 4 to 12 words. Be specific "
+    "and reference what the agent is actually doing (e.g. \"yes, refactor it and "
+    "rerun the tests\" rather than a bare \"ok\"). Unambiguous, but not a paragraph. "
+    "No preamble.\n"
+    "- Bias toward momentum: prefer approving and moving forward (\"yes, go ahead "
+    "with that\", \"looks right, ship it\", \"continue and I will review after\") — "
+    "the developer is on the agent's side and wants progress — while staying "
+    "context-appropriate. If it is a genuine either/or, still lead with the option "
+    "that keeps work moving.\n"
+    "- If the agent hit an error or is blocked, offer a specific unblock (\"skip "
+    "that file and keep going\", \"try the other approach instead\", \"install it "
+    "and retry\") rather than a vague \"ok\".\n"
+    "- If several prompts or questions are stacked on screen, answer ONLY the most "
+    "recent (bottom-most) one. Never bundle answers to multiple questions into a "
+    "single reply.\n"
+    "- Output ONLY a JSON array of strings, e.g. [\"yes, go ahead with that\","
+    "\"continue and I will review after\",\"explain the tradeoff first\"]. No keys, "
+    "no markdown, no commentary."
 )
 
 
@@ -108,7 +113,7 @@ def _parse(text: str) -> list[str]:
             t = re.sub(r'^[\s\-\*\d.)"]+', "", ln).strip().strip('"').strip()
             if t:
                 out.append(t)
-    return [s[:60] for s in out][:3]  # cap length + count (2-3)
+    return [s[:100] for s in out][:3]  # cap length + count (2-3)
 
 
 def _record_usage(usage) -> None:
