@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 
-from . import tmux
+from . import tmux, suggest
 from .config import settings
 from .auth import require_token
 from .models import (
@@ -21,6 +21,7 @@ from .models import (
     PromptInfo,
     SendRequest,
     SendResponse,
+    SuggestResponse,
     TailResponse,
     Thread,
     ThreadsResponse,
@@ -112,3 +113,18 @@ async def post_key(index: int, body: KeyRequest) -> SendResponse:
     except tmux.TmuxError as e:
         raise HTTPException(status_code=502, detail=str(e))
     return SendResponse(ok=True)
+
+@app.post(
+    "/api/threads/{index}/suggest",
+    response_model=SuggestResponse,
+    dependencies=[Depends(require_token)],
+)
+async def post_suggest(index: int) -> SuggestResponse:
+    try:
+        captured = tmux.capture(index, lines=settings.suggest_tail_lines, scrollback=False)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except tmux.TmuxError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    parsed = tmux.parse_prompt(captured)
+    return SuggestResponse(suggestions=suggest.generate_suggestions(captured, parsed))

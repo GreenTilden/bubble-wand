@@ -24,6 +24,16 @@ class Settings:
         self.default_tail_lines: int = int(os.getenv("CLAWATCH_TAIL_LINES", "40"))
         self.max_send_len: int = int(os.getenv("CLAWATCH_MAX_SEND_LEN", "4000"))
 
+        # LLM-backed momentum suggestions (wrist co-pilot). Disabled unless an
+        # ANTHROPIC_API_KEY is present (read explicitly so we can skip building the
+        # client and return [] instead of erroring). Key lives in clawatch.env.
+        self.anthropic_api_key: str | None = os.getenv("ANTHROPIC_API_KEY")
+        self.suggest_enabled: bool = bool(self.anthropic_api_key)
+        self.suggest_model: str = os.getenv("CLAWATCH_SUGGEST_MODEL", "claude-haiku-4-5-20251001")
+        self.suggest_max_tokens: int = int(os.getenv("CLAWATCH_SUGGEST_MAX_TOKENS", "150"))
+        self.suggest_timeout: float = float(os.getenv("CLAWATCH_SUGGEST_TIMEOUT", "6"))
+        self.suggest_tail_lines: int = int(os.getenv("CLAWATCH_SUGGEST_TAIL_LINES", "40"))
+
         # Bearer token. If unset, generate one and log it at startup so local
         # testing "just works"; in production pass CLAWATCH_TOKEN explicitly.
         token = os.getenv("CLAWATCH_TOKEN")

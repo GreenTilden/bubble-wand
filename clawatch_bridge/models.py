@@ -53,3 +53,7 @@ class KeyRequest(BaseModel):
 
 class SendResponse(BaseModel):
     ok: bool
+
+
+class SuggestResponse(BaseModel):
+    suggestions: list[str] = []
