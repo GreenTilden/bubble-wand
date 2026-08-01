@@ -69,3 +69,15 @@ class UsageResponse(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     estimated_cost_usd: float = 0.0
+
+
+class SetupRequest(BaseModel):
+    setup_token: str
+    api_key: str = Field(min_length=8, max_length=300)
+
+
+class SetupResponse(BaseModel):
+    ok: bool
+    token: str
+    connectUrl: str
+    note: str = ""

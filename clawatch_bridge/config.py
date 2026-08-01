@@ -42,5 +42,33 @@ class Settings:
         self.token_generated: bool = token is None
         self.token: str = token or secrets.token_urlsafe(24)
 
+        # --- Self-serve provisioning (the sellable, own-your-key path) -------
+        # Where provisioned secrets are persisted. A customer instance points
+        # CLAWATCH_ENV_FILE at its own file so instances never share secrets.
+        self.env_file: str = os.getenv(
+            "CLAWATCH_ENV_FILE", os.path.expanduser("~/clawatch-bridge/clawatch.env")
+        )
+        # One-time token gating /setup: minted fresh each boot, only meaningful
+        # while UNCONFIGURED, printed to the log at startup, never persisted.
+        self.setup_token: str = secrets.token_urlsafe(16)
+        # Onboarding is LAN/loopback-only by default; escape hatch for odd nets.
+        self.allow_remote_setup: bool = os.getenv(
+            "CLAWATCH_ALLOW_REMOTE_SETUP", ""
+        ).lower() in ("1", "true", "yes")
+
+    @property
+    def configured(self) -> bool:
+        """Configured once a customer API key is present. Until then the bridge
+        serves /setup; after, /setup is inert (409). An operator instance with a
+        key already in env is therefore 'configured' and unaffected."""
+        return bool(self.anthropic_api_key)
+
+    def apply_provision(self, api_key: str, token: str) -> None:
+        """Live-apply provisioned secrets to the running process (no restart)."""
+        self.anthropic_api_key = api_key
+        self.suggest_enabled = True
+        self.token = token
+        self.token_generated = False
+
 
 settings = Settings()

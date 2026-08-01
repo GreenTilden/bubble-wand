@@ -8,12 +8,14 @@ Endpoints (all under /api require `Authorization: Bearer <CLAWATCH_TOKEN>`):
 """
 from __future__ import annotations
 
+import hmac
 import logging
 from datetime import datetime, timezone
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse
 
-from . import tmux, suggest
+from . import tmux, suggest, setup as setup_mod
 from .config import settings
 from .auth import require_token
 from .models import (
@@ -21,6 +23,8 @@ from .models import (
     PromptInfo,
     SendRequest,
     SendResponse,
+    SetupRequest,
+    SetupResponse,
     SuggestResponse,
     UsageResponse,
     TailResponse,
@@ -42,6 +46,9 @@ async def _startup() -> None:
         log.warning("No CLAWATCH_TOKEN set — generated one for this run:")
         log.warning("    CLAWATCH_TOKEN=%s", settings.token)
         log.warning("Pass it to the watch app, or set CLAWATCH_TOKEN in the environment to pin it.")
+    if not settings.configured:
+        log.warning("UNCONFIGURED (no ANTHROPIC_API_KEY) — finish onboarding from a device on this LAN:")
+        log.warning("    http://<this-box-LAN-IP>:%s/setup?t=%s", settings.port, settings.setup_token)
 
 
 @app.get("/healthz")
@@ -134,3 +141,36 @@ async def post_suggest(index: int) -> SuggestResponse:
 @app.get("/api/usage", response_model=UsageResponse, dependencies=[Depends(require_token)])
 async def get_usage() -> UsageResponse:
     return UsageResponse(**suggest.get_usage())
+
+
+# --- Self-serve onboarding (LAN-only; inert once configured) --------------- #
+
+@app.get("/setup", response_class=HTMLResponse)
+async def setup_page(request: Request, t: str = Query(default="")) -> HTMLResponse:
+    """Onboarding page where a customer pastes their own Anthropic key."""
+    if settings.configured:
+        return HTMLResponse(setup_mod.ALREADY_HTML, status_code=409)
+    if not setup_mod.caller_is_local(request):
+        return HTMLResponse(setup_mod.FORBIDDEN_HTML, status_code=403)
+    return HTMLResponse(setup_mod.setup_page(t))
+
+
+@app.post("/api/setup", response_model=SetupResponse)
+async def api_setup(request: Request, body: SetupRequest) -> SetupResponse:
+    if settings.configured:
+        raise HTTPException(status_code=409, detail="already configured")
+    if not setup_mod.caller_is_local(request):
+        raise HTTPException(status_code=403, detail="setup allowed only from the local network")
+    if not hmac.compare_digest(body.setup_token, settings.setup_token):
+        raise HTTPException(status_code=401, detail="invalid or expired setup code")
+    api_key = body.api_key.strip()
+    if not api_key.startswith("sk-ant-"):
+        raise HTTPException(status_code=400, detail="that doesn't look like an Anthropic API key (expected sk-ant-…)")
+    token = setup_mod.provision(api_key)
+    base = f"http://{request.url.hostname}:{settings.port}"
+    return SetupResponse(
+        ok=True,
+        token=token,
+        connectUrl=base,
+        note="Enter this URL and token in the watch app's Settings, then pair.",
+    )

@@ -61,6 +61,13 @@ def _get_client():
     return _client
 
 
+def reset_client() -> None:
+    """Drop the cached client so the next call rebuilds it with current settings
+    (used after /setup provisions a key at runtime)."""
+    global _client
+    _client = None
+
+
 def generate_suggestions(cleaned: list[str], prompt: dict | None) -> list[str]:
     client = _get_client()
     if client is None:
