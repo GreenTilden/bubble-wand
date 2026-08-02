@@ -45,7 +45,7 @@ SaaS and not turnkey for non-developers — and that's deliberate.
 ## Quick start
 
 ```bash
-git clone https://github.com/DArnTech/bubble-wand
+git clone https://github.com/GreenTilden/bubble-wand
 cd bubble-wand
 ./install.sh
 ```
