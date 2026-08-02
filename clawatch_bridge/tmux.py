@@ -26,8 +26,13 @@ _NEEDS_INPUT_GLYPHS = set("✳✻✽✶✷✵✴❋✱✲✧✦✺✹✸*")
 # Box-drawing range (U+2500–U+257F) plus a few ASCII rule chars — used to spot
 # pure border/divider lines that are just terminal chrome.
 _BORDER_EXTRA = set("-—–_=│ ")
-# A numbered menu option, optionally preceded by the selection cursor "❯"/">".
-_OPTION_RE = re.compile(r"^\s*([❯>])?\s*(\d+)\.\s+(\S.*)$")
+# A numbered menu option: optional selection cursor (❯ and its look-alikes), then
+# "N." or "N)", then the label. Menus render "❯ 1. Yes …". No leading box border is
+# tolerated on purpose — Claude Code's plan box does NOT wrap its own numbered steps
+# in "│ … │", and allowing a border here made those plan steps parse as menu options.
+_OPTION_RE = re.compile(r"^\s*([❯>▸▶›])?\s*(\d+)[.)]\s+(\S.*)$")
+# Instructional sub-lines under a menu option (a hint, not part of the label).
+_MENU_HINT_PREFIXES = ("shift+tab", "ctrl+", "esc ", "esc·", "press ", "tab to", "· ")
 # Claude Code status bar, e.g. "Opus 4.8 · ▓▓▓ 311k ctx HARD · $22.12".
 _STATUS_TOKENS_RE = re.compile(r"([\d.]+)\s*([kmKM]?)\s*ctx")
 _STATUS_TIER_RE = re.compile(r"ctx\s+([A-Za-z]+)")
@@ -116,6 +121,8 @@ def _is_chrome(line: str) -> bool:
         return True
     if t == "❯":                          # empty input box caret
         return True
+    if t in ("↓", "↑", "▲", "▼"):         # scroll-more indicators inside a box
+        return True
     return False
 
 
@@ -137,65 +144,97 @@ def _clean_tail(lines: list[str]) -> list[str]:
     return out
 
 
+def _clean_question(text: str) -> str:
+    """Trim a joined question down to the final interrogative sentence, so a header
+    reads 'Would you like to proceed?' rather than dragging in trailing plan prose
+    that ended up adjacent after borders were stripped."""
+    q = text.strip()
+    if "?" not in q:
+        return q
+    end = q.rfind("?")
+    start = 0
+    for sep in (". ", "! ", "? "):
+        p = q.rfind(sep, 0, end)
+        if p != -1:
+            start = max(start, p + len(sep))
+    return q[start : end + 1].strip()
+
+
 def parse_prompt(cleaned: list[str]) -> dict | None:
     """Detect a Claude Code interactive menu in already-cleaned tail lines.
 
     Returns {"question": str, "options": [{"key","label","selected"}]} or None.
-    Requires the selection cursor "❯" on a numbered option. Only the contiguous
-    menu block anchored by that cursor is captured — numbered lists elsewhere in
-    the tail (e.g. inside a plan, which often has several) are NOT swept in. Doing
-    so previously produced bogus/duplicate options: duplicate option keys crash the
-    watch's LazyColumn, and stray plan bullets would send the wrong digit on tap.
+
+    The menu is anchored by the selection cursor "❯"; without one there is no live
+    prompt. The block is the TIGHT run of option lines around the cursor — options
+    render on consecutive lines with NO blank line between them, so a blank line
+    bounds the menu. That single rule does the heavy lifting:
+      * plan steps (their own numbered list) sit above the question and are always
+        separated from the menu by a blank line, so they never leak in; and
+      * a wrapped option label (a non-blank continuation line, e.g. option 3
+        spilling onto "the web") stays INSIDE the run and is joined onto its label,
+        instead of truncating the menu and dropping every option below it.
     """
-    # Every numbered-option line, with its position in the tail.
+    # Every numbered-option line, with its position in the cleaned tail.
     matches: list[tuple[int, dict]] = []
     for i, ln in enumerate(cleaned):
         m = _OPTION_RE.match(ln)
         if m:
             matches.append(
-                (
-                    i,
-                    {
-                        "key": m.group(2),
-                        "label": m.group(3).strip(),
-                        "selected": m.group(1) == "❯",
-                    },
-                )
+                (i, {"key": m.group(2), "label": m.group(3).strip(), "selected": bool(m.group(1))})
             )
-    # The live menu is anchored by the cursor; without one there is no prompt.
     sel = next((p for p, (_, o) in enumerate(matches) if o["selected"]), None)
     if sel is None:
         return None
 
-    # Expand from the cursor across the contiguous run of option lines — adjacent
-    # matches separated only by blank lines. Any non-blank line between two numbered
-    # lines (plan prose, the question) breaks the run, so plan bullets stay out.
-    def _only_blank_between(a: int, b: int) -> bool:
-        return all(not cleaned[k].strip() for k in range(a + 1, b))
+    def _no_blank_between(a: int, b: int) -> bool:
+        """True if no blank line lies strictly between line indices a and b."""
+        return all(cleaned[k].strip() for k in range(a + 1, b))
 
+    # Expand across consecutive options with no blank line between them.
     lo = hi = sel
-    while lo > 0 and _only_blank_between(matches[lo - 1][0], matches[lo][0]):
+    while lo > 0 and _no_blank_between(matches[lo - 1][0], matches[lo][0]):
         lo -= 1
-    while hi < len(matches) - 1 and _only_blank_between(matches[hi][0], matches[hi + 1][0]):
+    while hi < len(matches) - 1 and _no_blank_between(matches[hi][0], matches[hi + 1][0]):
         hi += 1
-
     block = matches[lo : hi + 1]
-    first_opt_idx = block[0][0]
 
-    # Dedupe by key (belt-and-suspenders; a real menu already has unique digits).
+    # The block ends at the first blank line at/after its last option.
+    block_end = block[-1][0] + 1
+    while block_end < len(cleaned) and cleaned[block_end].strip():
+        block_end += 1
+
+    # Assemble options, folding wrapped continuation lines into each label. A
+    # continuation is a non-blank, non-option, non-hint line before the next option.
     options: list[dict] = []
     seen: set[str] = set()
-    for _, o in block:
+    for bi, (line_idx, o) in enumerate(block):
+        nxt = block[bi + 1][0] if bi + 1 < len(block) else block_end
+        extra: list[str] = []
+        for k in range(line_idx + 1, nxt):
+            s = cleaned[k].strip()
+            if not s or _OPTION_RE.match(cleaned[k]):
+                continue
+            if any(s.lower().startswith(p) for p in _MENU_HINT_PREFIXES):
+                continue
+            extra.append(s)
+        label = (o["label"] + (" " + " ".join(extra) if extra else "")).strip()
         if o["key"] in seen:
             continue
         seen.add(o["key"])
-        options.append(o)
+        options.append({"key": o["key"], "label": label, "selected": o["selected"]})
 
-    question = ""
-    for j in range(first_opt_idx - 1, -1, -1):
-        if cleaned[j].strip():
-            question = cleaned[j].strip()
-            break
+    # Question: skip the blank gap above the first option, then join the contiguous
+    # non-blank lines (Claude wraps it), stopping at a blank or another option.
+    first_line = block[0][0]
+    j = first_line - 1
+    while j >= 0 and not cleaned[j].strip():
+        j -= 1
+    q_lines: list[str] = []
+    while j >= 0 and cleaned[j].strip() and not _OPTION_RE.match(cleaned[j]):
+        q_lines.append(cleaned[j].strip())
+        j -= 1
+    question = _clean_question(" ".join(reversed(q_lines)))
     return {"question": question, "options": options}
 
 
