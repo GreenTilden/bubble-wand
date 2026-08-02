@@ -35,6 +35,7 @@ class Settings:
         self.suggest_tail_lines: int = int(os.getenv("CLAWATCH_SUGGEST_TAIL_LINES", "40"))
         # A working-thread summary is one short line; keep the budget tiny.
         self.summary_max_tokens: int = int(os.getenv("CLAWATCH_SUMMARY_MAX_TOKENS", "40"))
+        self.prompt_summary_max_tokens: int = int(os.getenv("CLAWATCH_PROMPT_SUMMARY_MAX_TOKENS", "60"))
         self.suggest_price_in: float = float(os.getenv("CLAWATCH_SUGGEST_PRICE_IN", "1.0"))
         self.suggest_price_out: float = float(os.getenv("CLAWATCH_SUGGEST_PRICE_OUT", "5.0"))
 

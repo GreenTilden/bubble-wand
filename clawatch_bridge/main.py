@@ -154,6 +154,27 @@ async def post_summary(index: int) -> SummaryResponse:
     return SummaryResponse(summary=suggest.generate_summary(captured))
 
 
+@app.post(
+    "/api/threads/{index}/prompt-summary",
+    response_model=SummaryResponse,
+    dependencies=[Depends(require_token)],
+)
+async def post_prompt_summary(index: int) -> SummaryResponse:
+    """One short line describing the DECISION a paused thread is asking for, so the
+    watch can show it above the option chips. Menu-aware; degrades to \"\" if there
+    is no live menu or Haiku is unavailable."""
+    try:
+        captured = tmux.capture(index, lines=settings.suggest_tail_lines, scrollback=False)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except tmux.TmuxError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    parsed = tmux.parse_prompt(captured)
+    if not parsed:
+        return SummaryResponse(summary="")
+    return SummaryResponse(summary=suggest.generate_prompt_summary(captured, parsed))
+
+
 @app.get("/api/usage", response_model=UsageResponse, dependencies=[Depends(require_token)])
 async def get_usage() -> UsageResponse:
     return UsageResponse(**suggest.get_usage())
