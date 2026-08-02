@@ -26,6 +26,7 @@ from .models import (
     SetupRequest,
     SetupResponse,
     SuggestResponse,
+    SummaryResponse,
     UsageResponse,
     TailResponse,
     Thread,
@@ -136,6 +137,21 @@ async def post_suggest(index: int) -> SuggestResponse:
         raise HTTPException(status_code=502, detail=str(e))
     parsed = tmux.parse_prompt(captured)
     return SuggestResponse(suggestions=suggest.generate_suggestions(captured, parsed))
+
+
+@app.post(
+    "/api/threads/{index}/summary",
+    response_model=SummaryResponse,
+    dependencies=[Depends(require_token)],
+)
+async def post_summary(index: int) -> SummaryResponse:
+    try:
+        captured = tmux.capture(index, lines=settings.suggest_tail_lines, scrollback=False)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except tmux.TmuxError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return SummaryResponse(summary=suggest.generate_summary(captured))
 
 
 @app.get("/api/usage", response_model=UsageResponse, dependencies=[Depends(require_token)])

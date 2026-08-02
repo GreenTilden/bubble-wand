@@ -64,6 +64,12 @@ class SuggestResponse(BaseModel):
     suggestions: list[str] = []
 
 
+class SummaryResponse(BaseModel):
+    # One short present-tense line describing what a WORKING thread is doing;
+    # empty string on any failure so the watch degrades to the plain status.
+    summary: str = ""
+
+
 class UsageResponse(BaseModel):
     calls: int = 0
     input_tokens: int = 0

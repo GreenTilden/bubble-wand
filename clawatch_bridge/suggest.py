@@ -49,6 +49,23 @@ SYSTEM_PROMPT = (
 )
 
 
+SUMMARY_SYSTEM_PROMPT = (
+    "You are a wrist co-pilot. A developer is glancing at a smartwatch to see what "
+    "each of their running Claude Code agents is doing RIGHT NOW. Given the recent "
+    "terminal output from one agent that is actively working (not waiting on the "
+    "developer), write ONE short status line describing what it is currently doing.\n"
+    "\n"
+    "Rules:\n"
+    "- 3 to 8 words, present tense, concrete. Name the actual activity: "
+    "\"running the gradle build\", \"editing the tmux parser\", \"searching for "
+    "the crash\", \"installing dependencies\".\n"
+    "- No trailing punctuation, no quotes, no preamble, no leading dash. Just the "
+    "phrase.\n"
+    "- If you genuinely cannot tell, output: working\n"
+    "- Output ONLY the phrase, nothing else."
+)
+
+
 def _get_client():
     global _client
     if _client is None and settings.suggest_enabled:
@@ -142,3 +159,32 @@ def get_usage() -> dict:
         "output_tokens": ot,
         "estimated_cost_usd": round(cost, 4),
     }
+
+
+def generate_summary(cleaned: list[str]) -> str:
+    """One short present-tense line describing what a WORKING thread is doing.
+    Any failure (no key, timeout, rate limit) degrades to "" so the watch just
+    shows the plain status."""
+    client = _get_client()
+    if client is None or not cleaned:
+        return ""
+    tail_text = "\n".join(cleaned[-settings.suggest_tail_lines:])[-4000:]
+    try:
+        msg = client.with_options(timeout=settings.suggest_timeout).messages.create(
+            model=settings.suggest_model,
+            max_tokens=settings.summary_max_tokens,
+            system=SUMMARY_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": f"Recent terminal from the coding agent:\n{tail_text}"}],
+        )
+    except Exception as e:  # noqa: BLE001 -- any SDK/HTTP failure degrades to ""
+        log.warning("summary: anthropic call failed: %s", e)
+        return ""
+    try:
+        _record_usage(msg.usage)
+    except Exception:  # noqa: BLE001
+        pass
+    text = "".join(b.text for b in msg.content if b.type == "text").strip()
+    # Collapse to a single tidy line, strip stray quotes/bullets, cap length.
+    text = text.splitlines()[0].strip() if text else ""
+    text = re.sub(r'^[\s\-\*\d.)]+', '', text).strip().strip('"').strip("'").strip()
+    return text[:60]
