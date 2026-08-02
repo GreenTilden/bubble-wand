@@ -1,6 +1,9 @@
-# clawatch-bridge
+# 🫧 bubble-wand
 
-**The self-hosted bridge behind Bubbles — the Wear OS wrist co-pilot for Claude Code.**
+**The self-hosted bridge behind [Bubbles](https://get.darn-tech.com) — the Wear OS wrist co-pilot for Claude Code.**
+
+> Run your own bridge — your Anthropic key and your code never leave your machine.
+> Docs & install: **https://get.darn-tech.com**
 
 Run this on the machine where your Claude Code sessions live. It exposes each
 running session to the [Bubbles](#the-bubbles-watch-app) watch app so you can — from
@@ -9,7 +12,7 @@ and tap through menus. **Your Anthropic key and your code never leave your box.*
 Nothing is hosted by anyone else; you bring your own key.
 
 ```
-   Wear OS watch  ──HTTP(+bearer)──▶  clawatch-bridge  ──tmux──▶  your Claude Code panes
+   Wear OS watch  ──HTTP(+bearer)──▶  bubble-wand      ──tmux──▶  your Claude Code panes
    (Bubbles app)                      (this repo, on YOUR box)     (session "dev", window 1)
 ```
 
@@ -42,14 +45,14 @@ SaaS and not turnkey for non-developers — and that's deliberate.
 ## Quick start
 
 ```bash
-git clone <this-repo> clawatch-bridge
-cd clawatch-bridge
+git clone https://github.com/DArnTech/bubble-wand
+cd bubble-wand
 ./install.sh
 ```
 
 The installer:
 1. creates a virtualenv and installs dependencies (`fastapi`, `uvicorn`, `anthropic`);
-2. installs a **systemd `--user` service** (`clawatch-bridge`) with lingering enabled,
+2. installs a **systemd `--user` service** (`clawatch-bridge`, bubble-wand's engine) with lingering enabled,
    so it starts on boot and keeps running after you log out;
 3. writes a config file **with no secrets in it**; and
 4. prints a one-time **setup URL** for your box's LAN address, e.g.
@@ -198,4 +201,4 @@ separately.)*
 
 ## License
 
-_License to be finalized before public release._
+[Apache License 2.0](./LICENSE) © 2026 DArnTech LLC.
