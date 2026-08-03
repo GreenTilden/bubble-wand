@@ -38,10 +38,21 @@ _OPTION_RE = re.compile(r"^\s*([❯>▸▶›])?\s*(\d+)[.)]\s+(\S.*)$")
 _CHECKBOX_RE = re.compile(r"^\[( |x|X|✓|✔)\]\s*")
 # Instructional sub-lines under a menu option (a hint, not part of the label).
 _MENU_HINT_PREFIXES = ("shift+tab", "ctrl+", "esc ", "esc·", "press ", "tab to", "· ")
-# Claude Code status bar, e.g. "Opus 4.8 · ▓▓▓ 311k ctx HARD · $22.12".
+# Claude Code status bar, e.g. "Opus 4.8 · ▓▓▓ 311k ctx HARD · Σ4.2M · $22.12".
 _STATUS_TOKENS_RE = re.compile(r"([\d.]+)\s*([kmKM]?)\s*ctx")
 _STATUS_TIER_RE = re.compile(r"ctx\s+([A-Za-z]+)")
 _STATUS_COST_RE = re.compile(r"\$\s*([\d.]+)")
+# Cumulative session token spend, printed by the status line as "Σ4.2M" / "Σ812k".
+_STATUS_SPEND_RE = re.compile(r"Σ\s*([\d.]+)\s*([kmKM]?)")
+
+
+def _scale_tokens(n: float, suffix: str) -> int:
+    suffix = suffix.lower()
+    if suffix == "k":
+        return int(n * 1_000)
+    if suffix == "m":
+        return int(n * 1_000_000)
+    return int(n)
 
 
 class TmuxError(Exception):
@@ -290,19 +301,21 @@ def parse_status(lines: list[str]) -> dict | None:
             n = float(m.group(1))
         except ValueError:
             continue
-        suffix = m.group(2).lower()
-        if suffix == "k":
-            tokens = int(n * 1_000)
-        elif suffix == "m":
-            tokens = int(n * 1_000_000)
-        else:
-            tokens = int(n)
+        tokens = _scale_tokens(n, m.group(2))
         model = t.split("·", 1)[0].strip() or None
         tier_m = _STATUS_TIER_RE.search(t)
         tier = tier_m.group(1) if tier_m else None
         cost_m = _STATUS_COST_RE.search(t)
         cost = float(cost_m.group(1)) if cost_m else None
-        return {"model": model, "ctxTokens": tokens, "ctxTier": tier, "costUsd": cost}
+        spend_m = _STATUS_SPEND_RE.search(t)
+        spend = _scale_tokens(float(spend_m.group(1)), spend_m.group(2)) if spend_m else None
+        return {
+            "model": model,
+            "ctxTokens": tokens,
+            "ctxTier": tier,
+            "costUsd": cost,
+            "spendTokens": spend,
+        }
     return None
 
 
@@ -353,6 +366,7 @@ def list_threads() -> list[dict]:
                 "ctxTokens": (meter or {}).get("ctxTokens"),
                 "ctxTier": (meter or {}).get("ctxTier"),
                 "costUsd": (meter or {}).get("costUsd"),
+                "spendTokens": (meter or {}).get("spendTokens"),
             }
         )
     return threads

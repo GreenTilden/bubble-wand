@@ -20,6 +20,7 @@ class Thread(BaseModel):
     ctxTokens: int | None = None
     ctxTier: str | None = None
     costUsd: float | None = None
+    spendTokens: int | None = None  # cumulative session token spend (Σ in the bar)
 
 
 class ThreadsResponse(BaseModel):
