@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import time
 
 from .config import settings
 
@@ -31,6 +32,10 @@ _BORDER_EXTRA = set("-—–_=│ ")
 # tolerated on purpose — Claude Code's plan box does NOT wrap its own numbered steps
 # in "│ … │", and allowing a border here made those plan steps parse as menu options.
 _OPTION_RE = re.compile(r"^\s*([❯>▸▶›])?\s*(\d+)[.)]\s+(\S.*)$")
+# Multi-select checkbox at the head of an option label, e.g. "[ ] Pepperoni" /
+# "[x] Mushrooms". Its presence marks the whole menu as multi-select (digits
+# TOGGLE options; submission happens on the separate ✔ Submit tab).
+_CHECKBOX_RE = re.compile(r"^\[( |x|X|✓|✔)\]\s*")
 # Instructional sub-lines under a menu option (a hint, not part of the label).
 _MENU_HINT_PREFIXES = ("shift+tab", "ctrl+", "esc ", "esc·", "press ", "tab to", "· ")
 # Claude Code status bar, e.g. "Opus 4.8 · ▓▓▓ 311k ctx HARD · $22.12".
@@ -217,12 +222,23 @@ def parse_prompt(cleaned: list[str]) -> dict | None:
                 continue
             if any(s.lower().startswith(p) for p in _MENU_HINT_PREFIXES):
                 continue
+            if s.lower() in ("submit", "✔ submit"):
+                # The un-numbered Submit row of a multi-select menu — a control,
+                # not part of the option label above it.
+                continue
             extra.append(s)
         label = (o["label"] + (" " + " ".join(extra) if extra else "")).strip()
         if o["key"] in seen:
             continue
         seen.add(o["key"])
-        options.append({"key": o["key"], "label": label, "selected": o["selected"]})
+        cb = _CHECKBOX_RE.match(label)
+        checked = None
+        if cb:
+            checked = cb.group(1) not in (" ",)
+            label = _CHECKBOX_RE.sub("", label).strip()
+        options.append(
+            {"key": o["key"], "label": label, "selected": o["selected"], "checked": checked}
+        )
 
     # Question: skip the blank gap above the first option, then join the contiguous
     # non-blank lines (Claude wraps it), stopping at a blank or another option.
@@ -235,7 +251,8 @@ def parse_prompt(cleaned: list[str]) -> dict | None:
         q_lines.append(cleaned[j].strip())
         j -= 1
     question = _clean_question(" ".join(reversed(q_lines)))
-    return {"question": question, "options": options}
+    multi = any(o["checked"] is not None for o in options)
+    return {"question": question, "options": options, "multiSelect": multi}
 
 
 def _valid_index(index: int) -> bool:
@@ -348,6 +365,12 @@ def _do_capture(target: str, lines: int, scrollback: bool, clean: bool) -> list[
         args += ["-S", "-"]  # from the start of the scrollback buffer
     out = _run(args)
     captured = out.splitlines()
+    # A tall, mostly-empty pane (e.g. a fresh session) pads the capture with
+    # blank rows below the content; drop them BEFORE the tail slice, or a menu
+    # sitting high in the pane falls entirely outside the window and the
+    # prompt goes undetected.
+    while captured and not captured[-1].strip():
+        captured.pop()
     if not scrollback and lines and lines > 0:
         captured = captured[-lines:]
     if clean:
@@ -368,6 +391,7 @@ _KEY_MAP: dict[str, list[str]] = {
     "interrupt": ["C-c"],     # stop a running command
     "clear": ["C-u"],         # clear the current input line
     "enter": ["Enter"],       # bare submit
+    "tab": ["Tab"],           # next question tab / toward ✔ Submit
 }
 
 
@@ -378,6 +402,40 @@ def send_key(index: int, action: str) -> None:
         raise ValueError(f"unknown key action: {action!r}")
     target = _pane_target(index)
     _run(["send-keys", "-t", target, *keys])
+
+
+def _is_submit_confirm(parsed: dict) -> bool:
+    """True if the parsed menu is the ✔ Submit review tab ('Ready to submit your
+    answers?' with '1. Submit answers / 2. Cancel')."""
+    return any(o["label"].lower().startswith("submit answers") for o in parsed["options"])
+
+
+def submit_menu(index: int) -> dict:
+    """Drive a multi-select question toward submission: Tab moves off the question
+    (to the next question, or to the ✔ Submit review tab). On the review tab,
+    select '1. Submit answers'. If another question renders instead, stop there —
+    the watch re-scrapes and keeps answering.
+    """
+    target = _pane_target(index)
+    # Guard: if no menu is on screen (already answered, race with another
+    # answerer), press NOTHING — blind keys would land in the chat input.
+    parsed = parse_prompt(_do_capture(target, 40, False, True))
+    if not parsed:
+        return {"submitted": False, "advanced": False}
+    if not _is_submit_confirm(parsed):
+        _run(["send-keys", "-t", target, "Tab"])
+        time.sleep(0.4)
+        parsed = parse_prompt(_do_capture(target, 40, False, True))
+        if parsed and not _is_submit_confirm(parsed):
+            return {"submitted": False, "advanced": True}
+    if parsed:
+        # On the review tab: the digit selects 'Submit answers' wherever the
+        # cursor sits; Enter would depend on cursor position.
+        _run(["send-keys", "-t", target, "-l", "--", "1"])
+    else:
+        # Menu vanished after Tab (unexpected fast path) — a bare Enter confirms.
+        _run(["send-keys", "-t", target, "Enter"])
+    return {"submitted": True, "advanced": False}
 
 
 def send(index: int, text: str, submit: bool) -> None:

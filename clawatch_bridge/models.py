@@ -30,12 +30,16 @@ class PromptOption(BaseModel):
     key: str            # the digit to send to select this option
     label: str
     selected: bool = False
+    # Multi-select checkbox state ([ ]/[x] in the menu); null on single-select menus.
+    checked: bool | None = None
 
 
 class PromptInfo(BaseModel):
     """A parsed Claude Code interactive menu (permission gate, choice list, …)."""
     question: str = ""
     options: list[PromptOption]
+    # True when the menu is a multi-select (digits TOGGLE; submission is separate).
+    multiSelect: bool = False
 
 
 class TailResponse(BaseModel):
@@ -53,11 +57,19 @@ class SendRequest(BaseModel):
 
 class KeyRequest(BaseModel):
     # Validated server-side against a fixed allowlist — never a raw key name.
-    action: str  # escape | interrupt | clear | enter
+    action: str  # escape | interrupt | clear | enter | tab
 
 
 class SendResponse(BaseModel):
     ok: bool
+
+
+class SubmitMenuResponse(BaseModel):
+    ok: bool
+    # submitted: Enter was pressed on the ✔ Submit tab. advanced: Tab landed on
+    # another question instead, so the watch should re-scrape and keep answering.
+    submitted: bool = False
+    advanced: bool = False
 
 
 class SuggestResponse(BaseModel):

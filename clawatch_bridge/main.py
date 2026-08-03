@@ -25,6 +25,7 @@ from .models import (
     SendResponse,
     SetupRequest,
     SetupResponse,
+    SubmitMenuResponse,
     SuggestResponse,
     SummaryResponse,
     UsageResponse,
@@ -122,6 +123,23 @@ async def post_key(index: int, body: KeyRequest) -> SendResponse:
     except tmux.TmuxError as e:
         raise HTTPException(status_code=502, detail=str(e))
     return SendResponse(ok=True)
+
+@app.post(
+    "/api/threads/{index}/submit-menu",
+    response_model=SubmitMenuResponse,
+    dependencies=[Depends(require_token)],
+)
+async def post_submit_menu(index: int) -> SubmitMenuResponse:
+    """Advance a multi-select menu toward ✔ Submit (Tab, then Enter only when no
+    further question renders). The watch's 'Submit these' button lands here."""
+    try:
+        result = tmux.submit_menu(index)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except tmux.TmuxError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return SubmitMenuResponse(ok=True, **result)
+
 
 @app.post(
     "/api/threads/{index}/suggest",
