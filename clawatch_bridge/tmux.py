@@ -10,6 +10,7 @@ Security rules enforced here:
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import time
@@ -289,8 +290,14 @@ def parse_status(lines: list[str]) -> dict | None:
     structured fields for the watch's per-thread meter. Fail-soft: returns None
     if there is no status bar or it can't be parsed (format drift must never
     break capture).
+
+    Scans BOTTOM-UP. The real status bar is always the bottom-most matching line, and these
+    panes are agents that routinely *discuss* context budgets — a rendered conversation line
+    like "soft ~120k ctx · hard ~150k" parses perfectly and, scanning top-down, would win
+    over the actual bar. That was tolerable when this only tinted a meter; it is not once the
+    value drives a nudge threshold and gets appended to a permanent event log.
     """
-    for ln in lines:
+    for ln in reversed(lines):
         t = ln.strip()
         if "·" not in t or "ctx" not in t:
             continue
@@ -302,6 +309,13 @@ def parse_status(lines: list[str]) -> dict | None:
         except ValueError:
             continue
         tokens = _scale_tokens(n, m.group(2))
+        # ctxTokens is derived from a RENDERED, ROUNDED string ("107k" -> 107000), so its
+        # true precision is the rendering step, not 1 token. Recorded so a consumer never
+        # reports a 400-token "improvement" that is pure rounding noise.
+        _suffix = (m.group(2) or "").lower()
+        _scale = 1_000_000 if _suffix == "m" else 1_000 if _suffix == "k" else 1
+        _decimals = len(m.group(1).split(".")[1]) if "." in m.group(1) else 0
+        resolution = max(1, _scale // (10 ** _decimals))
         model = t.split("·", 1)[0].strip() or None
         tier_m = _STATUS_TIER_RE.search(t)
         tier = tier_m.group(1) if tier_m else None
@@ -312,6 +326,7 @@ def parse_status(lines: list[str]) -> dict | None:
         return {
             "model": model,
             "ctxTokens": tokens,
+            "ctxResolution": resolution,
             "ctxTier": tier,
             "costUsd": cost,
             "spendTokens": spend,
@@ -326,7 +341,7 @@ def list_threads() -> list[dict]:
             "-t",
             settings.tmux_window,
             "-F",
-            "#{pane_index}\t#{pane_current_command}\t#{pane_title}",
+            "#{pane_index}\t#{pane_current_command}\t#{pane_title}\t#{pane_id}\t#{pane_current_path}",
         ]
     )
     threads: list[dict] = []
@@ -337,6 +352,13 @@ def list_threads() -> list[dict]:
         idx = int(parts[0])
         command = parts[1] if len(parts) > 1 else ""
         title = parts[2] if len(parts) > 2 else ""
+        # pane_id (%N) is stable for the pane's whole life and never reused while the tmux
+        # server lives — which is exactly the lifetime a wash spans. pane_index is NOT an
+        # identity: it is recomputed every poll and panes have already been destroyed and
+        # recreated, so indices and ids diverge. Anything that outlives one poll keys on
+        # pane_id. cwd is carried only as a repo BASENAME downstream, never a full path.
+        pane_id = parts[3] if len(parts) > 3 else ""
+        cwd = parts[4] if len(parts) > 4 else ""
         glyph, status, label = _derive_status(title)
         # Tail-based prompt detection beats the title glyph: if a pane is parked at
         # an interactive menu, surface it as NEEDS_INPUT so it's never hidden
@@ -345,9 +367,16 @@ def list_threads() -> list[dict]:
         has_prompt = False
         meter: dict | None = None
         try:
-            raw = _do_capture(f"{settings.tmux_window}.{idx}", 25, False, False)
+            # Capture the WHOLE visible pane, then slice for the prompt check. The old
+            # 25-line window could push the status bar out of frame entirely — a permission
+            # dialog, a long plan box, or a task list is enough — and then ctxTokens silently
+            # went None. As a meter tint that was cosmetic; as a nudge threshold it means the
+            # check stops running with nothing anywhere reporting that it stopped.
+            # _do_capture pops trailing blanks BEFORE slicing, so raw[-25:] is byte-identical
+            # to what the prompt path received before. No extra tmux call.
+            raw = _do_capture(f"{settings.tmux_window}.{idx}", 0, False, False)
             meter = parse_status(raw)
-            if parse_prompt(_clean_tail(raw)):
+            if parse_prompt(_clean_tail(raw[-25:])):
                 has_prompt = True
                 status = "NEEDS_INPUT"
         except TmuxError:
@@ -362,8 +391,13 @@ def list_threads() -> list[dict]:
                 "title": title,
                 "label": label,
                 "hasPrompt": has_prompt,
+                # Durable identity. paneId survives the whole life of the pane; repo is the
+                # cwd BASENAME only — never the full path, and never pane contents.
+                "paneId": pane_id or None,
+                "repo": os.path.basename(cwd.rstrip("/")) if cwd else None,
                 "model": (meter or {}).get("model"),
                 "ctxTokens": (meter or {}).get("ctxTokens"),
+                "ctxResolution": (meter or {}).get("ctxResolution"),
                 "ctxTier": (meter or {}).get("ctxTier"),
                 "costUsd": (meter or {}).get("costUsd"),
                 "spendTokens": (meter or {}).get("spendTokens"),
