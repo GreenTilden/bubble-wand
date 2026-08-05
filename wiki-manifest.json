@@ -1,0 +1,9 @@
+{
+  "_note": "CONFIG for the composable BookStack doc-sync. Engine: operator-scripts/utility/bookstack-sync.py. Doc paths are relative to THIS file's directory. Publishes the PUBLIC bubble-wand integration guide (mirrors the get.darn-tech.com/guide/ page) so it's canonical on the wiki too. Public-safe copy. NO bookstack_url key BY DESIGN — this repo's remote is PUBLIC and the target is an internal LAN address; the engine supplies it from DEFAULT_URL (override per-run with --bookstack-url). Do not re-add it.",
+  "source_label": "bubble-wand",
+  "shelf": "Open Source",
+  "book": "bubble-wand",
+  "pages": [
+    { "doc": "README.md", "title": "bubble-wand — Integration Guide" }
+  ]
+}
