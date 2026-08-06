@@ -110,6 +110,14 @@ are added by `/setup`, not by hand.
 | `CLAWATCH_TAIL_LINES` | `40` | Default number of recent lines returned per thread. |
 | `CLAWATCH_SUGGEST_MODEL` | `claude-haiku-4-5-20251001` | Model used for wrist reply suggestions (uses your key). |
 | `CLAWATCH_SUGGEST_MAX_TOKENS` | `150` | Cap on suggestion output. |
+| `CLAWATCH_CTX_SOFT_TOKENS` | `120000` | Soft context-pressure threshold. Your number, not the vendor's — Claude Code only prints a context *tier* near its own ~1M limit, so ordinary sessions carry none at all. |
+| `CLAWATCH_CTX_HARD_TOKENS` | `150000` | Hard context-pressure threshold. |
+| `CLAWATCH_CTX_REARM_RATIO` | `0.8` | A level fires once on the way up and re-arms only after the thread falls back below `ratio × threshold`, so a session parked just over the line doesn't buzz forever. |
+| `CLAWATCH_EVENT_LOG` | `~/.local/state/bubble-wand/wash-events.jsonl` | Append-only pressure/wash event log, `0600`. **Metrics and pane identity only — never pane content.** No HTTP route serves it. |
+| `CLAWATCH_RESEED_COMMAND` | *(empty)* | Slash-command used to re-seed a pane after a wash. Empty by default: with none set, a wash stops after a verified clear and records that it did not re-seed. |
+| `CLAWATCH_RESEED_PROBE` | *(empty)* | Repo-relative path; if it's missing in the pane's directory, skip the re-seed rather than run a command that repo can't satisfy. |
+| `CLAWATCH_WASH_PANE_COMMANDS` | `claude` | Allowlist of pane commands a wash may touch. A pane that has dropped to a shell is never washed — `/clear` there is a shell command, not a Claude one. |
+| `CLAWATCH_AUTOWASH` | *(off)* | Automatic wash on idle + hard pressure. Ships off. |
 
 Restart after editing config: `systemctl --user restart clawatch-bridge`.
 
@@ -145,6 +153,20 @@ tunnel hostname should be treated as a secret.
 - **Onboarding is LAN-locked.** `/setup` works only from loopback/private addresses, only
   with the one-time code, and only while unconfigured; any proxy/tunnel hop or a
   provisioned bridge is rejected.
+- **The event log cannot contain your transcript.** Pressure and wash events go to an
+  append-only `0600` JSONL file, and the writer accepts exactly six value types — none of
+  which is a string. There is no free-text field anywhere in the schema, including
+  `reason`, which is a closed enum precisely so an exception message (tmux errors carry
+  raw subprocess output) can never be logged. Model names are slugified and capped at 40
+  characters rather than passed through. Thread identity is `host:tmuxServerPid:paneId`;
+  the Claude Code session UUID was rejected as an identifier because it *is* the
+  transcript filename. No cost or spend figure appears in any event.
+- **A wash cannot type into the wrong thing.** It runs only on an allowlisted pane command,
+  re-checks the pane's identity before every keystroke, verifies the clear actually
+  happened before re-seeding, and refuses to press Enter while a menu is on screen or when
+  the typed line isn't exactly the configured command. Earlier versions re-pasted the pane
+  tail after clearing; that is gone, so pane content no longer round-trips through the
+  watch at all. **This increment reduces content exposure.**
 
 ---
 
@@ -160,7 +182,13 @@ All `/api` routes require `Authorization: Bearer <CLAWATCH_TOKEN>`.
 | POST | `/api/threads/{index}/send` | Body `{"text": "...", "submit": true}` — dictated reply |
 | POST | `/api/threads/{index}/key` | Body `{"action": "escape\|interrupt\|clear\|enter"}` |
 | POST | `/api/threads/{index}/suggest` | Haiku-generated reply suggestions (needs your key; else `[]`) |
+| POST | `/api/threads/{index}/wash` | Start a context wash. **No body.** → `202 {"washId": "..."}`; `409` if a guard refused it |
+| GET | `/api/threads/{index}/wash/{washId}` | Wash stage → `{"stage","outcome","reseed"}` |
 | GET | `/api/usage` | Suggestion token/cost tally |
+
+There is deliberately **no `GET /api/events`**. The event log is read from local disk
+by whatever consumes it; adding a route would put every thread's context curve on an
+internet-reachable surface to save a `cat`.
 | GET | `/setup` · POST `/api/setup` | One-time LAN onboarding (see above) |
 
 `index` is the integer pane index (`1..N`), verified against the live pane list.

@@ -15,10 +15,27 @@ class Thread(BaseModel):
     title: str
     label: str
     hasPrompt: bool = False  # an interactive menu is on screen (tappable, no dictation)
+    # Durable identity. list_threads() has computed these since the Phase-0 fix, but
+    # they were NOT declared here — and pydantic v2 drops extra kwargs silently, so
+    # `Thread(**t)` in main.py discarded all three on the way out. They were computed
+    # server-side and reached no client at all. Declared now because the pressure and
+    # wash layers key on paneId, and a silently-dropped identity would have produced a
+    # nudge system that keyed on pane INDEX — which is recomputed every poll.
+    paneId: str | None = None
+    repo: str | None = None     # cwd BASENAME only — never a full path
     # Claude Code status-bar meter, recovered from the pane status line; null when absent.
     model: str | None = None
     ctxTokens: int | None = None
+    # The true precision of ctxTokens: it comes from a RENDERED, ROUNDED string
+    # ("107k" -> 107000), so a consumer must never report a sub-resolution delta as
+    # an improvement.
+    ctxResolution: int | None = None
     ctxTier: str | None = None
+    # Operator-threshold pressure (NONE | SOFT | HARD), computed by pressure.py.
+    # DELIBERATELY NOT ctxTier: the vendor only emits a tier near its own ~1M limit,
+    # so panes at 107k/98k carry no tier at all and the watch's meter reddened at
+    # ~2.7x past the operator's actual hard stop.
+    ctxPressure: str | None = None
     costUsd: float | None = None
     spendTokens: int | None = None  # cumulative session token spend (Σ in the bar)
 
@@ -71,6 +88,21 @@ class SubmitMenuResponse(BaseModel):
     # another question instead, so the watch should re-scrape and keep answering.
     submitted: bool = False
     advanced: bool = False
+
+
+class WashStartResponse(BaseModel):
+    """202 + a washId. The POST takes NO body: a wash has exactly one meaning, and
+    a body would invite a client to start specifying how to type into a live
+    session."""
+    washId: str
+    stage: str = "QUEUED"
+
+
+class WashStatusResponse(BaseModel):
+    washId: str
+    stage: str            # QUEUED | CLEAR | VERIFY | RESEED | DONE
+    outcome: str | None = None   # ok | cleared_not_reseeded | failed | blocked
+    reseed: str | None = None    # command | none
 
 
 class SuggestResponse(BaseModel):

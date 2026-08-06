@@ -78,6 +78,33 @@ def _run(args: list[str], timeout: int = _TIMEOUT) -> str:
     return proc.stdout
 
 
+_SERVER_PID: int | None = None
+
+
+def server_pid() -> int | None:
+    """The tmux server's pid, cached for the process lifetime.
+
+    Half of the durable thread identity: `threadKey = host:tmuxServerPid:paneId`.
+    pane ids (%N) are unique and never reused *while the server lives*, but a
+    restarted tmux server starts numbering again — so without the pid, events from
+    two different server generations would collide on one key and a wash from
+    yesterday would appear to belong to today's pane.
+
+    Cached because it cannot change without this process's world changing anyway:
+    if the tmux server restarts, every pane target this bridge holds is already
+    invalid. Fail-soft: None on any error, and callers degrade the key rather than
+    refuse to record.
+    """
+    global _SERVER_PID
+    if _SERVER_PID is None:
+        try:
+            out = _run(["display-message", "-p", "#{pid}"]).strip()
+            _SERVER_PID = int(out) if out.isdigit() else None
+        except (TmuxError, ValueError):
+            _SERVER_PID = None
+    return _SERVER_PID
+
+
 def _derive_status(title: str) -> tuple[str, str, str]:
     """Return (glyph, status, label) from a pane title.
 

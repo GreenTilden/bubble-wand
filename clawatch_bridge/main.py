@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 
-from . import tmux, suggest, setup as setup_mod
+from . import tmux, suggest, setup as setup_mod, pressure, wash as wash_mod
 from .config import settings
 from .auth import require_token
 from .models import (
@@ -23,6 +23,8 @@ from .models import (
     PromptInfo,
     SendRequest,
     SendResponse,
+    WashStartResponse,
+    WashStatusResponse,
     SetupRequest,
     SetupResponse,
     SubmitMenuResponse,
@@ -61,10 +63,16 @@ async def healthz() -> dict:
 @app.get("/api/threads", response_model=ThreadsResponse, dependencies=[Depends(require_token)])
 async def get_threads() -> ThreadsResponse:
     try:
-        threads = [Thread(**t) for t in tmux.list_threads()]
+        raw = tmux.list_threads()
     except tmux.TmuxError as e:
         raise HTTPException(status_code=502, detail=str(e))
-    return ThreadsResponse(threads=threads)
+    # Pressure is computed HERE, on the poll, rather than by the client: three
+    # client loops across two watches hit this endpoint, and a client-side
+    # decision would fire (and log) the same crossing up to three times.
+    for t in raw:
+        t["ctxPressure"] = pressure.observe(t)
+    wash_mod.maybe_autowash(raw)   # ships disabled; see wash.maybe_autowash
+    return ThreadsResponse(threads=[Thread(**t) for t in raw])
 
 
 @app.get(
@@ -123,6 +131,45 @@ async def post_key(index: int, body: KeyRequest) -> SendResponse:
     except tmux.TmuxError as e:
         raise HTTPException(status_code=502, detail=str(e))
     return SendResponse(ok=True)
+
+@app.post(
+    "/api/threads/{index}/wash",
+    response_model=WashStartResponse,
+    status_code=202,
+    dependencies=[Depends(require_token)],
+)
+async def post_wash(index: int) -> WashStartResponse:
+    """Start a context wash. Returns 202 immediately with a washId; poll
+    GET .../wash/{washId} for the stage.
+
+    Async on purpose: a wash takes seconds (escape, clear, verify, re-seed), and
+    holding the request open would run past the watch client's 15s callTimeout —
+    the wash would succeed while the caller saw a network failure.
+
+    Takes NO body. A wash has exactly one meaning; a body would invite a client to
+    start specifying how to type into a live Claude session.
+    """
+    wash_id, blocked = wash_mod.request_wash(index, trigger="manual")
+    if wash_id is None:
+        code = 404 if blocked in ("pane_missing", "index_invalid") else 409
+        raise HTTPException(status_code=code, detail=blocked or "blocked")
+    return WashStartResponse(washId=wash_id)
+
+
+@app.get(
+    "/api/threads/{index}/wash/{wash_id}",
+    response_model=WashStatusResponse,
+    dependencies=[Depends(require_token)],
+)
+async def get_wash(index: int, wash_id: str) -> WashStatusResponse:
+    w = wash_mod.status(wash_id)
+    if w is None or w.get("index") != index:
+        raise HTTPException(status_code=404, detail="unknown wash")
+    return WashStatusResponse(
+        washId=wash_id, stage=w["stage"], outcome=w.get("outcome"),
+        reseed=w.get("reseed"),
+    )
+
 
 @app.post(
     "/api/threads/{index}/submit-menu",
