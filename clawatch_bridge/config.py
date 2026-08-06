@@ -60,6 +60,56 @@ class Settings:
             "CLAWATCH_ALLOW_REMOTE_SETUP", ""
         ).lower() in ("1", "true", "yes")
 
+        # --- Context pressure, nudges, and the server-side wash --------------
+        # OPERATOR thresholds, NOT the vendor's ctxTier: the vendor only emits a
+        # tier near its own ~1M limit, so panes at 107k/98k carry none at all.
+        self.ctx_soft_tokens: int = int(os.getenv("CLAWATCH_CTX_SOFT_TOKENS", "120000"))
+        self.ctx_hard_tokens: int = int(os.getenv("CLAWATCH_CTX_HARD_TOKENS", "150000"))
+        # Re-arm at 0.8x so a thread parked just over a threshold buzzes ONCE,
+        # not on every poll forever.
+        self.ctx_rearm_ratio: float = float(os.getenv("CLAWATCH_CTX_REARM_RATIO", "0.8"))
+        # A thread first seen ABOVE a threshold starts disarmed, so a bridge
+        # restart never fires a burst. Set 0 for threshold testing.
+        self.ctx_seed_baseline: bool = os.getenv(
+            "CLAWATCH_CTX_SEED_BASELINE", "1"
+        ).lower() not in ("0", "false", "no")
+        self.ctx_sample_delta: int = int(os.getenv("CLAWATCH_CTX_SAMPLE_DELTA", "5000"))
+        self.ctx_sample_interval: float = float(
+            os.getenv("CLAWATCH_CTX_SAMPLE_INTERVAL", "300"))
+
+        # Append-only JSONL, 0600. NOT /var/log: this is an unprivileged
+        # `systemd --user` unit and a fleet path cannot be a committed default.
+        self.event_log: str = os.getenv("CLAWATCH_EVENT_LOG") or os.path.join(
+            os.getenv("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
+            "bubble-wand", "wash-events.jsonl",
+        )
+        self.event_max_bytes: int = int(os.getenv("CLAWATCH_EVENT_MAX_BYTES", "5000000"))
+        self.event_keep: int = int(os.getenv("CLAWATCH_EVENT_KEEP", "3"))
+        # Strict mode RAISES on a schema violation instead of dropping the field.
+        # Tests only — in production a telemetry bug must never break a poll.
+        self.event_strict: bool = os.getenv(
+            "CLAWATCH_EVENT_STRICT", "").lower() in ("1", "true", "yes")
+
+        # A wash types /clear into whatever is running in the pane. ALLOWLIST,
+        # never a denylist: a pane that has dropped to a shell must not receive
+        # "/clear" as a bash command.
+        self.wash_enabled: bool = os.getenv(
+            "CLAWATCH_WASH_ENABLED", "1").lower() not in ("0", "false", "no")
+        self.wash_pane_commands: tuple[str, ...] = tuple(
+            c.strip().lower()
+            for c in os.getenv("CLAWATCH_WASH_PANE_COMMANDS", "claude").split(",")
+            if c.strip()
+        )
+        self.wash_clear_attempts: int = int(os.getenv("CLAWATCH_WASH_CLEAR_ATTEMPTS", "2"))
+        # Re-seed knobs stay GENERIC. This repo is meant to be cloned, so it must
+        # not ship a house command; the operator's own env supplies "/brief".
+        # A wash recorded as reseed:"none" is a FACT the collector can count.
+        self.reseed_command: str = os.getenv("CLAWATCH_RESEED_COMMAND", "").strip()
+        self.reseed_probe: str = os.getenv("CLAWATCH_RESEED_PROBE", "").strip()
+        # The automation seam. Ships OFF; turning it on is this one variable.
+        self.autowash_enabled: bool = os.getenv(
+            "CLAWATCH_AUTOWASH", "").lower() in ("1", "true", "yes")
+
     @property
     def configured(self) -> bool:
         """Configured once a customer API key is present. Until then the bridge
