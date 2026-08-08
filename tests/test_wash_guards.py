@@ -151,6 +151,66 @@ def test_reseed_tail_is_a_valid_event_value(env):
     assert "tail" in events.SCHEMA["wash.completed"]["reseed"].allowed
 
 
+# ── the clear-verification sentinel ─────────────────────────────────────────
+# The bug that made the wash look broken on 2026-08-08: the sentinel was taken
+# from a RAW capture, so it could be a box-drawing border from Claude Code's
+# input frame -- which is redrawn right after a successful /clear. It survived
+# every attempt, and the wash aborted on panes that had cleared fine.
+
+def test_a_pane_that_really_cleared_is_not_reported_as_uncleared(env, monkeypatch):
+    """The 2026-08-08 failure, end to end.
+
+    Models a pane that clears properly: the real output goes away, and Claude
+    Code immediately redraws its input frame. If the sentinel and the
+    verification both come from a RAW capture, the sentinel IS that frame, it is
+    still on screen afterwards, and the wash reports sentinel_survived on a pane
+    that cleared perfectly. Asserting on the OUTCOME rather than on capture
+    arguments is deliberate -- an argument assertion passes as soon as any one
+    call is cleaned, which is how the first version of this test passed against
+    the very bug it was written for.
+    """
+    from clawatch_bridge import wash, tmux
+    frame = "╭" + "─" * 78 + "╮"
+    state = {"cleared": False}
+
+    def fake_send(index, text, submit):
+        if text == "/clear":
+            state["cleared"] = True
+
+    def fake_capture(index, lines, scrollback, clean=True):
+        body = [] if state["cleared"] else ["the actual output line that matters"]
+        return body if clean else [frame, *body]   # the frame is ALWAYS drawn
+
+    monkeypatch.setattr(tmux, "capture", fake_capture)
+    monkeypatch.setattr(tmux, "send", fake_send)
+    monkeypatch.setattr(tmux, "send_key", lambda *a, **k: None)
+    monkeypatch.setattr(tmux, "paste", lambda *a, **k: None)
+    monkeypatch.setattr(tmux, "parse_prompt", lambda lines: None)
+    monkeypatch.setattr(wash, "_still_same_pane", lambda w: True)
+    monkeypatch.setattr(wash, "_ctx_now", lambda i: 1000)
+    monkeypatch.setattr(wash.time, "sleep", lambda s: None)
+    wash._WASHES["w1"] = {
+        "washId": "w1", "index": 1, "paneId": "%1", "threadKey": "t",
+        "stage": "QUEUED", "outcome": None, "startedMs": 0, "trigger": "manual",
+        "ctxBefore": 1, "ctxResolution": 1000, "reseed": None, "error": None,
+    }
+    wash._run_wash("w1")
+
+    assert not rows(env, "wash.clear_failed"), \
+        "a pane whose content really went away must not read as uncleared"
+    assert wash.status("w1")["outcome"] != "failed"
+
+
+def test_a_border_line_is_not_a_usable_sentinel_once_cleaned(env):
+    """_clean_tail is what makes the sentinel trustworthy: strip the frame and
+    the longest remaining line is real output, which /clear actually removes."""
+    from clawatch_bridge import wash, tmux
+    frame = "╭" + "─" * 78 + "╮"
+    raw = [frame, "short", "the actual output line that matters"]
+    assert wash._sentinel(raw) == frame, "raw capture picks the border (the bug)"
+    assert wash._sentinel(tmux._clean_tail(raw)) != frame, "cleaned does not"
+
+
 # ── the sentinel never reaches disk ─────────────────────────────────────────
 
 def test_no_wash_event_can_carry_the_sentinel(env):

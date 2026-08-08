@@ -232,8 +232,26 @@ def _run_wash(wash_id: str) -> None:
     try:
         # ── CLEAR ────────────────────────────────────────────────────────────
         _set(wash_id, stage="CLEAR")
+        # Two captures, for two different jobs.
+        #
+        # `raw` is the re-seed payload: 200 lines, uncleaned, cleaned later by
+        # _reseed_tail_text so the paste keeps as much real output as possible.
+        #
+        # The sentinel comes from the CLEANED 40-line tail, and this is the part
+        # the first port got wrong. _sentinel picks the longest substantial line
+        # as "most distinctive"; in a raw capture that is very often a
+        # box-drawing border from Claude Code's input frame, which is redrawn
+        # immediately AFTER a successful /clear. The sentinel then survives every
+        # attempt, the wash concludes the pane never cleared, and it aborts
+        # without re-seeding -- on a pane that cleared perfectly well.
+        #
+        # Measured on live panes: 2 of 4 had a raw sentinel that _is_border and
+        # _is_chrome both flag. Both panes the operator washed on 2026-08-08
+        # failed exactly this way. The watch never hit it because it verified
+        # against repo.tail(index, 40), which is chrome-stripped -- so this is
+        # the watch's own behaviour, restored.
         raw = tmux.capture(index, lines=200, scrollback=False, clean=False)
-        sentinel = _sentinel(raw)
+        sentinel = _sentinel(tmux.capture(index, lines=40, scrollback=False, clean=True))
 
         cleared = False
         attempts = 0
@@ -251,7 +269,10 @@ def _run_wash(wash_id: str) -> None:
             time.sleep(0.15)
             tmux.send(index, "/clear", submit=True)
             time.sleep(0.8 if attempt == 1 else 1.5)
-            after = tmux.capture(index, lines=200, scrollback=False, clean=False)
+            # Cleaned, and the SAME shape the sentinel was taken from -- checking
+            # a chrome-stripped needle against a raw haystack would re-introduce
+            # the mismatch from the other direction.
+            after = tmux.capture(index, lines=40, scrollback=False, clean=True)
             if sentinel is None:
                 # Nothing substantial to check against. Treat as cleared but SAY
                 # SO in the record — "we could not verify" must never silently
