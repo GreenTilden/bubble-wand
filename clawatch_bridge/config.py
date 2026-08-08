@@ -11,7 +11,7 @@ import secrets
 class Settings:
     def __init__(self) -> None:
         # Bind address. Default 0.0.0.0 so a watch anywhere on the LAN can reach it;
-        # set CLAWATCH_HOST=192.168.0.22 to restrict to fenton's LAN interface.
+        # set CLAWATCH_HOST=<your-lan-ip> to restrict it to one interface.
         self.host: str = os.getenv("CLAWATCH_HOST", "0.0.0.0")
         self.port: int = int(os.getenv("CLAWATCH_PORT", "8793"))
 
