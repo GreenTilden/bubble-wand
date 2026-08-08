@@ -106,6 +106,16 @@ class Settings:
         # A wash recorded as reseed:"none" is a FACT the collector can count.
         self.reseed_command: str = os.getenv("CLAWATCH_RESEED_COMMAND", "").strip()
         self.reseed_probe: str = os.getenv("CLAWATCH_RESEED_PROBE", "").strip()
+        # Tail-paste fallback: used when the slash-command re-seed does not apply
+        # to this pane's repo (probe absent) or none is configured. Bounded on
+        # BOTH axes -- an unbounded paste would refill the context the wash just
+        # emptied, which is a self-defeating re-seed, and a long paste is also a
+        # long window in which the pane can change under us.
+        self.reseed_tail_enabled: bool = os.getenv(
+            "CLAWATCH_RESEED_TAIL", "1").lower() not in ("0", "false", "no")
+        self.reseed_tail_lines: int = int(os.getenv("CLAWATCH_RESEED_TAIL_LINES", "120"))
+        self.reseed_tail_max_chars: int = int(
+            os.getenv("CLAWATCH_RESEED_TAIL_MAX_CHARS", "8000"))
         # The automation seam. Ships OFF; turning it on is this one variable.
         self.autowash_enabled: bool = os.getenv(
             "CLAWATCH_AUTOWASH", "").lower() in ("1", "true", "yes")

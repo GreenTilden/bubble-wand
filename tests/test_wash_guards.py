@@ -152,6 +152,110 @@ def test_probe_unconfigured_when_no_probe_is_set(env, monkeypatch):
     assert wash._probe_state(1) == "unconfigured"
 
 
+# ── the tail-paste fallback ─────────────────────────────────────────────────
+# Used where the slash-command does not apply. Everything the command path
+# guards, this path must guard too — the Enter at the end is just as live.
+
+def _paste_env(monkeypatch, rendered, *, menu=None, same_pane=True):
+    """Wire the paste path: `rendered` is what capture() returns AFTER the paste."""
+    from clawatch_bridge import wash, tmux
+    calls = {"keys": [], "pasted": []}
+    seq = iter(["", *([rendered] * 8)])  # first capture = empty input, then rendered
+
+    monkeypatch.setattr(tmux, "paste", lambda i, t: calls["pasted"].append(t))
+    monkeypatch.setattr(tmux, "send_key", lambda i, a: calls["keys"].append(a))
+    monkeypatch.setattr(tmux, "capture", lambda *a, **k: [next(seq, rendered)])
+    monkeypatch.setattr(tmux, "parse_prompt", lambda lines: menu)
+    monkeypatch.setattr(tmux, "_clean_tail", lambda x: x)
+    monkeypatch.setattr(wash, "_still_same_pane", lambda w: same_pane)
+    monkeypatch.setattr(wash.time, "sleep", lambda s: None)
+    return calls
+
+
+def test_the_clean_paste_path_submits(env, monkeypatch):
+    from clawatch_bridge import wash
+    calls = _paste_env(monkeypatch, "❯ [Pasted text #1 +40 lines]")
+    guard, submitted = wash._paste_and_submit(1, "some tail", {"index": 1, "paneId": "%1"})
+    assert guard == "clean" and submitted is True
+    assert calls["keys"] == ["enter"]
+    assert calls["pasted"] == ["some tail"]
+
+
+def test_an_empty_tail_never_presses_enter(env, monkeypatch):
+    """Enter on an empty input would submit a blank prompt into a session that
+    was just cleared — the wash would have made things strictly worse."""
+    from clawatch_bridge import wash
+    calls = _paste_env(monkeypatch, "❯")
+    guard, submitted = wash._paste_and_submit(1, "", {"index": 1, "paneId": "%1"})
+    assert guard == "empty_tail" and submitted is False
+    assert calls["keys"] == [] and calls["pasted"] == []
+
+
+def test_a_paste_that_did_not_land_aborts(env, monkeypatch):
+    """Input unchanged after the paste = it did not land. Same reasoning as the
+    empty tail: never Enter on an input we cannot see content in."""
+    from clawatch_bridge import wash
+    calls = _paste_env(monkeypatch, "")   # still empty after pasting
+    guard, submitted = wash._paste_and_submit(1, "some tail", {"index": 1, "paneId": "%1"})
+    assert guard == "paste_not_rendered" and submitted is False
+    assert "enter" not in calls["keys"]
+
+
+def test_a_menu_on_screen_aborts_the_paste_too(env, monkeypatch):
+    """Guard 4a is not command-specific: a paste can land while a permission
+    menu is already up, and the Enter would answer the menu."""
+    from clawatch_bridge import wash
+    calls = _paste_env(monkeypatch, "❯ 1. Yes", menu={"options": [{"label": "Yes"}]})
+    guard, submitted = wash._paste_and_submit(1, "some tail", {"index": 1, "paneId": "%1"})
+    assert guard == "menu_present_aborted" and submitted is False
+    assert "enter" not in calls["keys"] and "clear" in calls["keys"]
+
+
+def test_a_pane_that_moved_aborts_before_pasting(env, monkeypatch):
+    from clawatch_bridge import wash
+    calls = _paste_env(monkeypatch, "❯ x", same_pane=False)
+    guard, submitted = wash._paste_and_submit(1, "some tail", {"index": 1, "paneId": "%1"})
+    assert guard == "completion_drift_aborted" and submitted is False
+    assert calls["pasted"] == [], "nothing may be pasted into a pane that moved"
+
+
+def test_the_tail_is_bounded_on_both_axes(env, monkeypatch):
+    """An unbounded paste would refill the context the wash just emptied."""
+    from clawatch_bridge import wash, tmux
+    from clawatch_bridge.config import settings
+    monkeypatch.setattr(tmux, "_clean_tail", lambda x: x)
+    monkeypatch.setattr(settings, "reseed_tail_lines", 10, raising=False)
+    monkeypatch.setattr(settings, "reseed_tail_max_chars", 400, raising=False)
+
+    text = wash._reseed_tail_text([f"line {i} " + "x" * 60 for i in range(500)])
+    assert len(text) <= 400
+    assert text.startswith(wash.RESEED_TAIL_PREAMBLE)
+    # Trimmed from the FRONT — the most recent lines are the ones worth keeping.
+    assert "line 499" in text and "line 400" not in text
+
+
+def test_the_tail_says_what_it_is(env, monkeypatch):
+    """The model must not read a transcript of finished work as work in flight."""
+    from clawatch_bridge import wash, tmux
+    monkeypatch.setattr(tmux, "_clean_tail", lambda x: x)
+    text = wash._reseed_tail_text(["did the thing"])
+    assert "was cleared" in text and "not a restored conversation" in text
+
+
+def test_a_blank_tail_produces_no_payload(env, monkeypatch):
+    from clawatch_bridge import wash, tmux
+    monkeypatch.setattr(tmux, "_clean_tail", lambda x: x)
+    assert wash._reseed_tail_text(["", "   ", ""]) == ""
+
+
+def test_reseed_tail_is_a_valid_event_value(env):
+    """event_strict rejects an unknown enum value, so "tail" must be declared —
+    otherwise every fallback re-seed would blow up at the emit, not at review."""
+    from clawatch_bridge import events
+    assert "tail" in events.SCHEMA["wash.reseeded"]["reseed"].allowed
+    assert "tail" in events.SCHEMA["wash.completed"]["reseed"].allowed
+
+
 # ── the sentinel never reaches disk ─────────────────────────────────────────
 
 def test_no_wash_event_can_carry_the_sentinel(env):

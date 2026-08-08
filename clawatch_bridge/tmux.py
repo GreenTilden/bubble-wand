@@ -60,7 +60,7 @@ class TmuxError(Exception):
     """A tmux command failed or returned unexpected output."""
 
 
-def _run(args: list[str], timeout: int = _TIMEOUT) -> str:
+def _run(args: list[str], timeout: int = _TIMEOUT, input: str | None = None) -> str:
     try:
         proc = subprocess.run(
             [TMUX, *args],
@@ -68,6 +68,7 @@ def _run(args: list[str], timeout: int = _TIMEOUT) -> str:
             capture_output=True,
             text=True,
             timeout=timeout,
+            input=input,
         )
     except FileNotFoundError as e:  # tmux not installed / not on PATH
         raise TmuxError("tmux not found on PATH") from e
@@ -526,3 +527,36 @@ def send(index: int, text: str, submit: bool) -> None:
         _run(["send-keys", "-t", target, "-l", "--", clean])
     if submit:
         _run(["send-keys", "-t", target, "Enter"])
+
+
+def paste(index: int, text: str) -> None:
+    """Paste multi-line text into a pane's input, WITHOUT submitting it.
+
+    Not a variant of send(). send() collapses newlines to spaces on purpose --
+    it carries dictated text, where one stray newline would submit the prompt
+    early -- and that collapsing is exactly why the wash's re-paste was dropped
+    as "lands as ONE space-joined line". This is the primitive that was missing:
+    `paste-buffer -p` wraps the text in bracketed-paste markers, which is how a
+    terminal app is told "this is one paste", so the Claude TUI takes the
+    newlines as content instead of N submissions.
+
+    The text goes in via load-buffer's stdin, never as an argv element, so pane
+    content is not exposed in the process table.
+
+    The buffer is DELETED in a finally. It holds captured pane text, and a tmux
+    buffer is readable by anything that can reach the tmux server and survives
+    until overwritten -- leaving it there would put pane content somewhere it
+    outlives the wash, which is the one thing this file's privacy rule forbids.
+    """
+    target = _pane_target(index)
+    if not text:
+        return
+    buf = f"clawatch-wash-{index}"
+    _run(["load-buffer", "-b", buf, "-"], input=text)
+    try:
+        _run(["paste-buffer", "-p", "-b", buf, "-t", target])
+    finally:
+        try:
+            _run(["delete-buffer", "-b", buf])
+        except TmuxError:
+            pass  # already gone; nothing to clean up
