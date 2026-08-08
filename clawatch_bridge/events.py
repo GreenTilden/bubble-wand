@@ -140,17 +140,21 @@ SCHEMA: dict[str, dict[str, object]] = {
     },
     "wash.reseeded": {
         "washId": IDENT,
-        "reseed": ENUM("command", "none"),
+        # "tail" = the bounded paste-back used where the slash-command does not
+        # apply. Kept as a THIRD value rather than folded into "command" so the
+        # collector can still tell a proper re-seed from a fallback one.
+        "reseed": ENUM("command", "none", "tail"),
         "probe": ENUM("present", "absent", "unconfigured"),
         "submitted": BOOL,
         "guard": ENUM("clean", "menu_present_aborted", "completion_drift_aborted",
-                      "invalid_command"),
+                      "invalid_command", "empty_tail", "paste_not_rendered",
+                      "tail_disabled"),
     },
     "wash.completed": {
         "washId": IDENT,
         "outcome": ENUM("ok", "cleared_not_reseeded", "failed", "blocked"),
         "ctxBefore": INT, "ctxAfter": INT, "ctxResolution": INT,
-        "durationMs": INT, "reseed": ENUM("command", "none"), "trigger": _TRIGGER,
+        "durationMs": INT, "reseed": ENUM("command", "none", "tail"), "trigger": _TRIGGER,
     },
     "wash.failed": {
         "washId": IDENT,
