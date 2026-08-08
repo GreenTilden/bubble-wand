@@ -84,14 +84,23 @@ async def get_tail(
     index: int,
     lines: int = Query(default=settings.default_tail_lines, ge=1, le=500),
     scrollback: bool = Query(default=False),
+    # Colour passthrough, opt-in per client. The watch does NOT ask for it --
+    # it strips colour deliberately, because on a 1.4" screen syntax colour is
+    # noise. A phone has the room, and tmux colour is a genuine "where am I"
+    # signal there. Default false so an existing client cannot be handed
+    # escape sequences it has no renderer for.
+    ansi: bool = Query(default=False),
 ) -> TailResponse:
     try:
-        captured = tmux.capture(index, lines=lines, scrollback=scrollback)
+        captured = tmux.capture(index, lines=lines, scrollback=scrollback, ansi=ansi)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except tmux.TmuxError as e:
         raise HTTPException(status_code=502, detail=str(e))
-    parsed = tmux.parse_prompt(captured)
+    # The menu parser NEVER sees escapes: a colour run inside an option label
+    # would break the option regex, and the labels it returns are rendered as
+    # text by clients that cannot decode colour. No-op when ansi is false.
+    parsed = tmux.parse_prompt([tmux.strip_ansi(ln) for ln in captured])
     return TailResponse(
         index=index,
         pane=f"{settings.tmux_window}.{index}",

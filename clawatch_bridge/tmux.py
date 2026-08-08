@@ -130,6 +130,25 @@ def _derive_status(title: str) -> tuple[str, str, str]:
 
 # ---- tail cleaning -------------------------------------------------------
 
+# Every escape sequence `capture-pane -e` can emit: SGR colour/attribute runs
+# (the only ones we keep), plus OSC strings and any other CSI, which we drop.
+# Everything in this file that INSPECTS a line -- chrome detection, border
+# detection, the menu parser, the status-bar parser -- must run on the stripped
+# form, or a colour run inside a line silently defeats the match. Colour is a
+# display concern and only the display layer is allowed to see it.
+_ANSI_RE = re.compile(
+    r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"   # OSC ... BEL/ST (titles, hyperlinks)
+    r"|\x1b\[[0-9;:?]*[ -/]*[@-~]"         # any CSI, incl. SGR
+    r"|\x1b[@-Z\\-_]"                      # lone two-character escapes
+)
+
+
+def strip_ansi(text: str) -> str:
+    """Plain text for anything that PARSES. A no-op on already-plain captures,
+    which is why the ansi and non-ansi paths can stay one code path."""
+    return _ANSI_RE.sub("", text)
+
+
 def _is_border(line: str) -> bool:
     """True if the line is only box-drawing / rule characters (a divider)."""
     t = line.strip()
@@ -176,15 +195,20 @@ def _clean_tail(lines: list[str]) -> list[str]:
     the meaningful conversation text (and any active prompt options)."""
     out: list[str] = []
     for ln in lines:
-        if _is_chrome(ln):
+        # Decide on the stripped form, keep the original. With `-e` captures a
+        # line can start with a colour run, which would make `startswith("⏵⏵")`
+        # and the border scan both miss -- so the status bar and dividers would
+        # reappear on the phone the moment colour was switched on.
+        probe = strip_ansi(ln)
+        if _is_chrome(probe):
             continue
-        if not ln.strip():
-            if out and not out[-1].strip():
+        if not probe.strip():
+            if out and not strip_ansi(out[-1]).strip():
                 continue  # collapse consecutive blanks
         out.append(ln.rstrip())
-    while out and not out[0].strip():
+    while out and not strip_ansi(out[0]).strip():
         out.pop(0)
-    while out and not out[-1].strip():
+    while out and not strip_ansi(out[-1]).strip():
         out.pop()
     return out
 
@@ -434,9 +458,18 @@ def list_threads() -> list[dict]:
     return threads
 
 
-def _do_capture(target: str, lines: int, scrollback: bool, clean: bool) -> list[str]:
-    """Capture a pane by its already-built target (no re-validation)."""
+def _do_capture(target: str, lines: int, scrollback: bool, clean: bool, ansi: bool = False) -> list[str]:
+    """Capture a pane by its already-built target (no re-validation).
+
+    `ansi` adds `-e`, which makes tmux emit the pane's colour/attribute escape
+    sequences instead of flattening them. Off by default and deliberately so:
+    the watch strips colour for legibility on a 1.4" screen, and every parser
+    in this module reads plain text. Only a client with room for it (the
+    Telegram Mini App) asks for colour, and only for DISPLAY.
+    """
     args = ["capture-pane", "-p", "-t", target]
+    if ansi:
+        args.append("-e")
     if scrollback:
         args += ["-S", "-"]  # from the start of the scrollback buffer
     out = _run(args)
@@ -454,9 +487,9 @@ def _do_capture(target: str, lines: int, scrollback: bool, clean: bool) -> list[
     return captured
 
 
-def capture(index: int, lines: int, scrollback: bool, clean: bool = True) -> list[str]:
+def capture(index: int, lines: int, scrollback: bool, clean: bool = True, ansi: bool = False) -> list[str]:
     target = _pane_target(index)
-    return _do_capture(target, lines, scrollback, clean)
+    return _do_capture(target, lines, scrollback, clean, ansi)
 
 
 # Fixed allowlist of control keys the watch may send. The client sends only the
