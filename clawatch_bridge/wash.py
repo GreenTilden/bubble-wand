@@ -1,33 +1,35 @@
-"""Server-side context wash: /clear, verify, then re-seed — by command or by paste.
+"""Server-side context wash: capture the tail, /clear, verify, paste the tail back.
 
-WHAT MOVED AND WHY
-  The wash used to be orchestrated entirely by the watch: capture the pane tail,
-  send /clear, poll to verify, then PASTE THE TAIL BACK. That last step is the
-  reason this moved. Re-pasting the tail
-    (a) round-trips full pane content through a wrist device and back,
-    (b) lands as ONE space-joined line, because /send collapses newlines, and
-    (c) is a lossy imitation of a re-seed that a slash-command does properly.
+WHAT MOVED, AND WHAT CAME BACK
+  The wash was originally the watch's: capture the pane tail, send /clear, poll
+  to verify, then PASTE THE TAIL BACK. Moving it bridge-side dropped that last
+  step for three stated reasons. Two had expired and the third was never
+  universal:
+    (a) "round-trips pane content through a wrist device" — gone. This runs
+        bridge-side; the text never leaves the pane it was captured from.
+    (b) "lands as ONE space-joined line" — described send(), which collapses
+        newlines BY DESIGN so dictated text cannot submit early. Not true of
+        pasting: tmux.paste() uses load-buffer plus `paste-buffer -p`, whose
+        bracketed-paste markers tell the TUI "this is one paste". Multi-line
+        survives; verified against a real pane.
+    (c) "a lossy imitation of a re-seed a slash-command does properly" — only
+        where a slash-command applies. On a repo with no .foreman/cycle.json
+        there is no "/brief" to be lossy against.
 
-WHY THE PASTE CAME BACK (operator call, 2026-08-08)
-  Two of those three had expired, and the third was never universal:
-    (a) is gone. The wash runs bridge-side now. Nothing round-trips through the
-        watch, and the text never leaves the pane it was captured from.
-    (b) was real, but it described send(), not pasting. send() collapses
-        newlines BY DESIGN so dictated text cannot submit early. The right
-        primitive is tmux.paste() — load-buffer plus `paste-buffer -p`, which
-        wraps the text in bracketed-paste markers so the TUI reads it as one
-        paste. Multi-line survives.
-    (c) holds only where a slash-command actually applies. On a repo with no
-        .foreman/cycle.json there is no "/brief" to be a lossy imitation OF, so
-        the real comparison is paste vs. an empty pane.
-  So the re-seed is now a fork: the configured command where its probe passes,
-  a bounded tail-paste otherwise. reseed is recorded as "command", "tail", or
-  "none" — and "none" now means a genuine failure worth looking at, rather than
-  the routine outcome it used to be on half the estate's repos.
+ONE LANE, ON PURPOSE (operator call, 2026-08-08)
+  This briefly forked: configured slash-command where its probe passed, paste
+  otherwise. That fork is GONE. The operator's reasoning, and it is the right
+  one for a file like this: one lane of work is one lane of failure to test. A
+  second re-seed path that only fires on repos carrying a marker file is a path
+  that is exercised rarely, reviewed rarely, and trusted anyway — in code whose
+  every branch ends in an Enter pressed into a live Claude session.
 
-  The paste is NOT context recovery and the preamble says so to the model in as
-  many words. It is rendered screen output. It beats nothing; it does not beat
-  /brief, which is why /brief still wins wherever it applies.
+  So: always paste the tail. CLAWATCH_RESEED_COMMAND and CLAWATCH_RESEED_PROBE
+  are no longer read and can be deleted from clawatch.env.
+
+  The paste is NOT context recovery, and the preamble tells the model so in as
+  many words. It is rendered screen output — a record of what happened, not
+  restored memory. It beats an empty pane, which is the only comparison left.
 
   Building it bridge-side is also what makes later automation a config flip
   instead of a rewrite: the watch cannot drive an auto-wash, because its polling
@@ -45,15 +47,17 @@ THIS FILE TYPES INTO A LIVE CLAUDE SESSION. THE GUARDS ARE THE FEATURE.
   3. VERIFY BEFORE RE-SEED. If the sentinel survives, the pane did NOT clear, and
      we abort WITHOUT re-seeding. Typing into a live, uncleared context is the
      worse failure.
-  4. THE AUTOCOMPLETE GUARD, and it is TWO checks rather than one. The spec said
-     "re-run parse_prompt() before the Enter that submits /brief", but
-     parse_prompt() CANNOT see a slash-command popup: it returns None unless it
-     finds a cursored, NUMBERED option, and Claude Code's "/br…" completion list
-     is not numbered. So parse_prompt() stays — it is the safety-critical one, and
-     it means "never press Enter while a permission menu is up" — and a second
-     render check confirms the typed line is EXACTLY the command before Enter.
-     Without it, "/brief" can submit as "/batch-brief" or "/pre-brief", both of
-     which share its prefix and both of which do something else.
+  4. NEVER ENTER BLIND, in two checks. parse_prompt() is the safety-critical
+     one: never press Enter while a permission menu is up, or the Enter answers
+     the menu instead of submitting. It runs on the paste path too — a paste
+     cannot open a menu, but it can land while one is already on screen. The
+     second check is that the input went from empty to non-empty; without it a
+     paste that silently failed to land would submit a BLANK prompt into a
+     session that was just cleared.
+     (The old second check compared the typed line against the exact command,
+     guarding "/brief" submitting as "/batch-brief". It went with the command
+     path — there is no fixed string to compare against now, and Claude Code
+     collapses a large paste to a "[Pasted text #N]" placeholder anyway.)
 
 THE SENTINEL IS NEVER LOGGED. It is computed from pane content, used to verify,
 and discarded in memory. Nothing derived from pane text reaches the event log —
@@ -272,37 +276,14 @@ def _run_wash(wash_id: str) -> None:
                     elapsedMs=_now_ms() - t0)
 
         # ── RESEED ───────────────────────────────────────────────────────────
-        # Two paths, and the pane's repo decides which. The slash-command is
-        # still preferred WHERE IT APPLIES -- "/brief" reconstructs cycle state
-        # properly, and no paste of rendered output can match that. Where it
-        # does not apply, the choice is not "command vs paste", it is "paste vs
-        # leave the operator with an empty pane", and the original deletion note
-        # ("a lossy imitation of a re-seed that a slash-command does properly")
-        # simply does not reach that case -- there is no slash-command to be
-        # lossy against. The wrist round-trip that motivated the deletion is
-        # also gone: this runs bridge-side, and the text never leaves the pane
-        # it came from.
+        # ONE path: paste the pre-clear tail back. `raw` was captured at the top
+        # of CLEAR, before anything was typed, so there is nothing left to
+        # capture by this point -- by construction.
         _set(wash_id, stage="RESEED")
-        cmd = settings.reseed_command
-        probe = _probe_state(index) if cmd else "unconfigured"
-
-        if cmd and probe != "absent":
-            guard, submitted = _type_and_submit(index, cmd, w)
-            _set(wash_id, reseed="command" if submitted else "none")
-            events.emit("wash.reseeded", key, washId=wash_id,
-                        reseed="command" if submitted else "none", probe=probe,
-                        submitted=submitted, guard=guard)
-            _finish(wash_id, "ok" if submitted else "cleared_not_reseeded",
-                    ctx_after=_ctx_now(index))
-            return
-
-        # Fallback: paste back what was on screen before the clear. `raw` was
-        # captured at the top of CLEAR, i.e. before anything was typed -- there
-        # is nothing left to capture now, by construction.
         if not settings.reseed_tail_enabled:
             _set(wash_id, reseed="none")
             events.emit("wash.reseeded", key, washId=wash_id, reseed="none",
-                        probe=probe, submitted=False, guard="tail_disabled")
+                        probe="unconfigured", submitted=False, guard="tail_disabled")
             _finish(wash_id, "cleared_not_reseeded", ctx_after=_ctx_now(index))
             return
 
@@ -310,7 +291,7 @@ def _run_wash(wash_id: str) -> None:
         guard, submitted = _paste_and_submit(index, tail, w)
         _set(wash_id, reseed="tail" if submitted else "none")
         events.emit("wash.reseeded", key, washId=wash_id,
-                    reseed="tail" if submitted else "none", probe=probe,
+                    reseed="tail" if submitted else "none", probe="unconfigured",
                     submitted=submitted, guard=guard)
         _finish(wash_id, "ok" if submitted else "cleared_not_reseeded",
                 ctx_after=_ctx_now(index))
@@ -329,65 +310,12 @@ def _run_wash(wash_id: str) -> None:
         _finish(wash_id, "failed")
 
 
-def _probe_state(index: int) -> str:
-    """Does this pane's repo satisfy the configured re-seed probe?
-
-    The probe is a repo-relative path (the operator sets ".foreman/cycle.json").
-    Resolved against the pane's cwd via tmux, so no path from a client is involved.
-    """
-    if not settings.reseed_probe:
-        return "unconfigured"
-    try:
-        out = tmux._run(
-            ["display-message", "-p", "-t", f"{settings.tmux_window}.{index}",
-             "#{pane_current_path}"]
-        ).strip()
-    except tmux.TmuxError:
-        return "absent"
-    if not out:
-        return "absent"
-    import os
-    return "present" if os.path.exists(os.path.join(out, settings.reseed_probe)) else "absent"
-
-
 def _ctx_now(index: int) -> int | None:
     try:
         t = _thread_by_index(index)
     except tmux.TmuxError:
         return None
     return (t or {}).get("ctxTokens")
-
-
-def _type_and_submit(index: int, cmd: str, w: dict) -> tuple[str, bool]:
-    """Guard 4, in two parts. Returns (guard_code, submitted)."""
-    if not cmd.startswith("/") or len(cmd) > 64 or any(c.isspace() for c in cmd):
-        # A re-seed command is a bare slash-command. Anything else is a config
-        # error, and typing it blind would be the worst possible response.
-        return "invalid_command", False
-
-    if not _still_same_pane(w):
-        return "completion_drift_aborted", False
-
-    # Type WITHOUT submitting.
-    tmux.send(index, cmd, submit=False)
-    time.sleep(0.45)
-
-    raw = tmux.capture(index, lines=40, scrollback=False, clean=False)
-
-    # 4a — the safety-critical check: never press Enter while a menu is up.
-    if tmux.parse_prompt(tmux._clean_tail(raw[-25:])):
-        tmux.send_key(index, "clear")   # withdraw what we typed
-        return "menu_present_aborted", False
-
-    # 4b — the completion check parse_prompt structurally cannot do. The typed
-    # line must END with exactly the command: an autocomplete popup that has
-    # advanced "/brief" toward "/batch-brief" leaves a different trailing token.
-    if not _typed_line_is_exact(raw, cmd):
-        tmux.send_key(index, "clear")
-        return "completion_drift_aborted", False
-
-    tmux.send_key(index, "enter")
-    return "clean", True
 
 
 RESEED_TAIL_PREAMBLE = (
@@ -425,12 +353,11 @@ def _reseed_tail_text(raw: list[str]) -> str:
 def _paste_and_submit(index: int, text: str, w: dict) -> tuple[str, bool]:
     """Guard 4 for the paste path. Returns (guard_code, submitted).
 
-    Same shape as _type_and_submit, but 4b cannot be the exact-command check:
-    there is no fixed string to compare against, and Claude Code collapses a
-    large paste to a placeholder like "[Pasted text #1 +N lines]" so the content
-    is not on screen to match anyway. The check that IS available -- and is the
-    one that matters -- is that the input went from empty to non-empty. If the
-    paste did not land, pressing Enter would submit an empty prompt into a
+    The second check cannot be an exact-content match: Claude Code collapses a
+    large paste to a placeholder like "[Pasted text #1 +N lines]", so the text
+    is not on screen to compare against. The check that IS available -- and is
+    the one that matters -- is that the input went from empty to non-empty. If
+    the paste did not land, pressing Enter would submit an empty prompt into a
     freshly cleared session.
     """
     if not text:
@@ -471,9 +398,9 @@ def _paste_and_submit(index: int, text: str, w: dict) -> tuple[str, bool]:
 def _input_line(lines: list[str]) -> str:
     """The bottom-most non-empty input line, stripped of prompt chrome.
 
-    Shares its chrome-stripping with _typed_line_is_exact deliberately: if the
-    prompt glyphs ever change, both checks should fail together rather than one
-    silently passing.
+    The prompt glyph set is the same one parse_status scans for; if Claude Code
+    ever changes it, this returns "" and the paste check fails closed rather
+    than silently passing.
     """
     for ln in reversed(lines):
         t = ln.strip().strip("│").strip()
@@ -484,23 +411,6 @@ def _input_line(lines: list[str]) -> str:
             continue
         return t
     return ""
-
-
-def _typed_line_is_exact(lines: list[str], cmd: str) -> bool:
-    """True when the bottom-most non-empty input line ends with exactly `cmd`.
-
-    Claude Code renders the input line with a leading prompt glyph and possibly a
-    box border, so the check is on the trailing token rather than the whole line.
-    """
-    for ln in reversed(lines):
-        t = ln.strip().strip("│").strip()
-        if not t:
-            continue
-        t = t.lstrip("❯>▸▶› ").strip()
-        if not t:
-            continue
-        return t.split()[-1] == cmd if t.split() else False
-    return False
 
 
 def maybe_autowash(threads: list[dict]) -> None:

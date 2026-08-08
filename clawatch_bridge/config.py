@@ -101,16 +101,13 @@ class Settings:
             if c.strip()
         )
         self.wash_clear_attempts: int = int(os.getenv("CLAWATCH_WASH_CLEAR_ATTEMPTS", "2"))
-        # Re-seed knobs stay GENERIC. This repo is meant to be cloned, so it must
-        # not ship a house command; the operator's own env supplies "/brief".
-        # A wash recorded as reseed:"none" is a FACT the collector can count.
-        self.reseed_command: str = os.getenv("CLAWATCH_RESEED_COMMAND", "").strip()
-        self.reseed_probe: str = os.getenv("CLAWATCH_RESEED_PROBE", "").strip()
-        # Tail-paste fallback: used when the slash-command re-seed does not apply
-        # to this pane's repo (probe absent) or none is configured. Bounded on
-        # BOTH axes -- an unbounded paste would refill the context the wash just
-        # emptied, which is a self-defeating re-seed, and a long paste is also a
-        # long window in which the pane can change under us.
+        # The re-seed: paste the pre-clear tail back, on every pane. There is no
+        # slash-command lane any more -- CLAWATCH_RESEED_COMMAND and
+        # CLAWATCH_RESEED_PROBE are no longer read (removed 2026-08-08; one lane
+        # of work is one lane of failure to test) and can be dropped from env.
+        # Bounded on BOTH axes -- an unbounded paste would refill the context the
+        # wash just emptied, which is a self-defeating re-seed, and a long paste
+        # is also a long window in which the pane can change under us.
         self.reseed_tail_enabled: bool = os.getenv(
             "CLAWATCH_RESEED_TAIL", "1").lower() not in ("0", "false", "no")
         self.reseed_tail_lines: int = int(os.getenv("CLAWATCH_RESEED_TAIL_LINES", "120"))
