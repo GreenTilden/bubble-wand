@@ -75,7 +75,7 @@ class SendRequest(BaseModel):
 
 class KeyRequest(BaseModel):
     # Validated server-side against a fixed allowlist — never a raw key name.
-    action: str  # escape | interrupt | clear | enter | tab
+    action: str  # escape | interrupt | clear | enter | tab | up | down | left | right
 
 
 class SendResponse(BaseModel):

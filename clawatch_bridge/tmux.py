@@ -468,6 +468,14 @@ _KEY_MAP: dict[str, list[str]] = {
     "clear": ["C-u"],         # clear the current input line
     "enter": ["Enter"],       # bare submit
     "tab": ["Tab"],           # next question tab / toward ✔ Submit
+    # Navigation. None of these commit anything: they move a selection within a
+    # menu, or scrub the input line. That is what makes them safe to expose as
+    # plain taps next to keys that DO commit — the phone client can drive a
+    # multi-select prompt to the right option without ever guessing at Enter.
+    "up": ["Up"],             # previous option / previous history entry
+    "down": ["Down"],         # next option
+    "left": ["Left"],         # cursor left within the input line
+    "right": ["Right"],       # cursor right within the input line
 }
 
 
