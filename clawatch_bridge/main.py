@@ -91,9 +91,17 @@ async def get_tail(
     # signal there. Default false so an existing client cannot be handed
     # escape sequences it has no renderer for.
     ansi: bool = Query(default=False),
+    # Bounded scrollback. WITHOUT this the `lines` above is a ceiling and never a
+    # floor -- bare capture-pane returns the visible pane, so asking a 45-row pane
+    # for 100 lines returns 45 with no error. tmux.capture has taken `history`
+    # since L15; this route did not expose it, so a client asking for it got the
+    # screen and no way to tell. Off by default: the watch's poll is unchanged.
+    history: bool = Query(default=False),
 ) -> TailResponse:
     try:
-        captured = tmux.capture(index, lines=lines, scrollback=scrollback, ansi=ansi)
+        captured = tmux.capture(
+            index, lines=lines, scrollback=scrollback, ansi=ansi, history=history
+        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except tmux.TmuxError as e:
