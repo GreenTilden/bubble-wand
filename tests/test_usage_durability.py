@@ -83,6 +83,24 @@ def test_write_is_atomic_and_leaves_no_temp(state):
     assert not os.path.exists(f"{state}.tmp")
 
 
+def test_api_usage_exposes_every_field_get_usage_returns(state):
+    """The route's response_model must not silently drop a field.
+
+    It did: cost_basis and since shipped in get_usage() while /api/usage served the old
+    shape, because pydantic drops undeclared keys without a word and the other tests all
+    called the function directly. Assert the CONTRACT, not the helper.
+    """
+    from clawatch_bridge.models import UsageResponse
+
+    suggest._record_usage(FakeUsage(3, 4))
+    returned = suggest.get_usage()
+    served = UsageResponse(**returned).model_dump()
+
+    assert set(served) == set(returned), (
+        f"UsageResponse drops {set(returned) - set(served)} — declare it in models.py")
+    assert served == returned
+
+
 def test_state_holds_totals_only_never_content(state):
     suggest._record_usage(FakeUsage(1, 1))
     saved = json.loads(state.read_text())

@@ -120,6 +120,12 @@ class UsageResponse(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     estimated_cost_usd: float = 0.0
+    # A response_model DROPS anything it does not declare, silently. Both fields below
+    # existed in suggest.get_usage() for a whole loop while the HTTP surface quietly
+    # served the old shape -- unit tests asserted the function, not the route. Any new
+    # key in get_usage() must be declared here too; test_api_usage_exposes_* pins it.
+    cost_basis: str = ""      # tokens are measured; dollars are a list-price estimate
+    since: str | None = None  # first-ever recorded call; a cumulative total needs a start
 
 
 class SetupRequest(BaseModel):
