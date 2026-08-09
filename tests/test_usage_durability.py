@@ -155,3 +155,45 @@ def test_pre_split_state_file_is_not_silently_dropped(state):
     u = suggest.get_usage()
     assert u["input_tokens"] == 1_000_000
     assert u["estimated_cost_usd"] > 0, "legacy tokens priced at nothing = spend vanishes"
+
+
+def test_per_model_dollars_survive_the_HTTP_boundary(state):
+    """Over the ROUTE, not the response_model in isolation.
+
+    The field this covers is a FLOAT inside by_model, whose annotation was
+    dict[str, dict[str, int]] until per-model pricing landed. Under that
+    annotation a fractional cost is a hard ValidationError -- loud rather than
+    lossy, but a 500 all the same, and only a request finds it. Twice now
+    (L14.1, L16) the defect has been a route serving a shape every unit test
+    agreed was correct.
+    """
+    from fastapi.testclient import TestClient
+    from clawatch_bridge import main
+    from clawatch_bridge.config import settings
+
+    suggest._record_usage(FakeUsage(1_000_000, 1_000_000), model="claude-haiku-4-5-20251001")
+    c = TestClient(main.app)
+    r = c.get("/api/usage", headers={"Authorization": f"Bearer {settings.token}"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    per = body["by_model"]["claude-haiku-4-5-20251001"]
+    assert per["calls"] == 1
+    assert isinstance(per["estimated_cost_usd"], float)
+    assert per["estimated_cost_usd"] > 0, "a million tokens priced at zero is not a price"
+    assert "priced" in per
+    assert "unattributed" in body
+
+
+def test_the_parts_sum_to_the_headline(state):
+    """A breakdown whose parts do not add up to the total is how a meter loses
+    its credibility -- which is exactly what the flat label did before L15, when
+    one price pair under-reported Sonnet ~3x."""
+    suggest._record_usage(FakeUsage(500_000, 100_000), model="claude-haiku-4-5-20251001")
+    suggest._record_usage(FakeUsage(200_000, 50_000), model="claude-sonnet-5")
+    u = suggest.get_usage()
+    parts = sum(m["estimated_cost_usd"] for m in u["by_model"].values())
+    parts += u["unattributed"]["estimated_cost_usd"]
+    assert round(parts, 4) == pytest.approx(u["estimated_cost_usd"], abs=0.0002)
+    assert (sum(m["calls"] for m in u["by_model"].values())
+            + u["unattributed"]["calls"]) == u["calls"]

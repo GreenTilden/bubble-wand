@@ -226,14 +226,25 @@ def get_usage() -> dict:
     cost = 0.0
     for model, per in by_model.items():
         p_in, p_out = settings.model_prices.get(model, fallback)
-        cost += per["input_tokens"] / 1e6 * p_in + per["output_tokens"] / 1e6 * p_out
+        per_cost = per["input_tokens"] / 1e6 * p_in + per["output_tokens"] / 1e6 * p_out
+        cost += per_cost
+        # Priced HERE, where the price table lives, and shipped with the split.
+        # The alternative is a client that re-implements pricing against its own
+        # copy of the rates -- two answers to "what did this cost", diverging the
+        # first time a rate changes. `priced` says whether this used the model's
+        # own rate or the co-pilot fallback, so an unpriced model is visible as
+        # an estimate rather than passing as a quote.
+        per["estimated_cost_usd"] = round(per_cost, 4)
+        per["priced"] = model in settings.model_prices
     # Anything the per-model split does not account for -- tokens from a state file
     # written before the split -- is priced at the co-pilot rate rather than dropped.
     # Dropping it would make the total FALL after an upgrade, which reads as a bug in
     # the meter and hides real spend.
     rest_in = max(0, it - sum(v["input_tokens"] for v in by_model.values()))
     rest_out = max(0, ot - sum(v["output_tokens"] for v in by_model.values()))
-    cost += rest_in / 1e6 * fallback[0] + rest_out / 1e6 * fallback[1]
+    rest_cost = rest_in / 1e6 * fallback[0] + rest_out / 1e6 * fallback[1]
+    cost += rest_cost
+    rest_calls = max(0, calls - sum(v["calls"] for v in by_model.values()))
     return {
         "calls": calls,
         "input_tokens": it,
@@ -250,6 +261,16 @@ def get_usage() -> dict:
         # cannot tell them apart. UsageResponse must declare this or pydantic drops
         # it silently -- the exact defect L14.1's live probe caught.
         "by_model": by_model,
+        # The remainder the split cannot attribute (tokens recorded before
+        # per-model metering existed). Reported rather than folded into the total
+        # in silence: a breakdown whose parts do not sum to the headline is what
+        # makes a meter untrustworthy, and the repair is to name the gap.
+        "unattributed": {
+            "calls": rest_calls,
+            "input_tokens": rest_in,
+            "output_tokens": rest_out,
+            "estimated_cost_usd": round(rest_cost, 4),
+        },
     }
 
 

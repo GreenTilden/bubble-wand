@@ -115,6 +115,34 @@ class SummaryResponse(BaseModel):
     summary: str = ""
 
 
+class ModelUsage(BaseModel):
+    """One model's slice of the meter, priced where the price table lives.
+
+    Declared as a MODEL rather than left inside a dict[str, dict[str, int]]: that
+    annotation predates per-model dollars, and under it a fractional cost is a
+    hard ValidationError (a 500, not a silent zero -- checked, not assumed). Loud
+    is better than lossy, but declaring the real shape is better than both.
+    """
+    calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    estimated_cost_usd: float = 0.0
+    # False when the model has no entry in the price table and the co-pilot rate
+    # was used instead. Travels with the number so an estimate cannot be read as
+    # a quote -- the same reason cost_basis exists on the total.
+    priced: bool = False
+
+
+class UnattributedUsage(BaseModel):
+    """Spend the per-model split cannot account for -- tokens recorded before
+    per-model metering existed. Present so the parts sum to the headline; a
+    breakdown that quietly does not is how a meter loses its credibility."""
+    calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    estimated_cost_usd: float = 0.0
+
+
 class UsageResponse(BaseModel):
     calls: int = 0
     input_tokens: int = 0
@@ -129,7 +157,8 @@ class UsageResponse(BaseModel):
     # Per-model token split. Declared for the same reason cost_basis and since had to
     # be: an undeclared key is dropped silently by the response_model, and the route
     # would serve a shape the unit tests never see because they test the function.
-    by_model: dict[str, dict[str, int]] = {}
+    by_model: dict[str, ModelUsage] = {}
+    unattributed: UnattributedUsage = Field(default_factory=UnattributedUsage)
 
 
 class DigestResponse(BaseModel):
