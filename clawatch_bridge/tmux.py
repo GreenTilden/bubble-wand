@@ -328,6 +328,64 @@ def _current_indices() -> list[int]:
     return [int(x) for x in out.split()]
 
 
+class PaneIdentityError(Exception):
+    """The pane at this index is not the pane the caller was looking at.
+
+    Deliberately NOT a subclass of ValueError: the routes map ValueError to 404
+    ("no such pane"), and this is a different fact -- the pane exists, it just
+    isn't yours any more. Conflating them would tell a client "gone" when the
+    truth is "moved", and the client's correct response differs (refresh and
+    re-point, vs drop the pane from the list).
+    """
+
+
+def _pane_id_map() -> dict[int, str]:
+    """index -> pane_id (%N) for the configured window, as tmux sees it RIGHT NOW.
+
+    Cheap on purpose: one list-panes, no captures. `list_threads` computes the
+    same mapping but pays a capture per pane, which is far too much to spend on
+    a per-request identity check.
+    """
+    out = _run([
+        "list-panes", "-t", settings.tmux_window, "-F", "#{pane_index}\t#{pane_id}",
+    ])
+    m: dict[int, str] = {}
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 2 and parts[0].strip().isdigit():
+            m[int(parts[0])] = parts[1].strip()
+    return m
+
+
+def assert_pane_identity(index: int, expected_pane_id: str | None) -> None:
+    """Verify that pane `index` is still the pane the caller means.
+
+    tmux pane indices are POSITIONAL and are renumbered when a pane is killed:
+    kill index 2 of four and the pane that was 3 becomes 2. Every route here
+    addresses by index, so after a split or a close on the desktop, a phone
+    holding index 3 silently reads -- and TYPES INTO -- a different session.
+    Proven empirically, not inferred (della cycle-66 L17).
+
+    `expected_pane_id` is an ASSERTION, never a target. This function only ever
+    compares; nothing downstream builds a tmux target from a client-supplied
+    string, so the structural control that this bridge touches only
+    `settings.tmux_window` is preserved by construction. A pane id belonging to
+    some other session simply is not in the map, and mismatches like any other.
+
+    No-op when `expected_pane_id` is None -- the watch does not send one and its
+    behaviour must be unchanged. That is a real gap and it is the watch's to
+    close if it wants to; a bridge cannot invent an identity a client never had.
+    """
+    if not expected_pane_id:
+        return
+    actual = _pane_id_map().get(index)
+    if actual != expected_pane_id:
+        raise PaneIdentityError(
+            f"pane {index} is {actual or 'gone'}, not {expected_pane_id} — "
+            "the tmux layout changed since this pane was opened"
+        )
+
+
 def _pane_target(index: int) -> str:
     """Build and validate a pane target. Raises ValueError on a bad/absent index."""
     if not _valid_index(index):
