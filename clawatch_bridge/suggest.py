@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import threading
+from datetime import datetime, timezone
 
 from .config import settings
 
@@ -18,9 +20,44 @@ log = logging.getLogger("clawatch.suggest")
 
 _client = None  # lazily built; None while suggest is disabled or pkg missing
 
-# Cumulative Haiku usage for the co-pilot itself (in-memory; resets on restart).
+# Cumulative Haiku usage for the co-pilot itself. DURABLE across restarts: an in-memory
+# counter silently means "since whatever restart last happened", so a quiet day and a
+# service bounce read identically. Persisted to settings.usage_state (totals only — no
+# pane content, no prompts) and reloaded at import. Every path here is best-effort: this
+# module's contract is that accounting NEVER breaks a suggestion.
 _usage_lock = threading.Lock()
-_usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0}
+_usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "since": None}
+
+
+def _load_usage() -> None:
+    """Best-effort restore of the cumulative counters. Corrupt or absent → start clean."""
+    try:
+        with open(settings.usage_state, encoding="utf-8") as fh:
+            saved = json.load(fh)
+        with _usage_lock:
+            for k in ("calls", "input_tokens", "output_tokens"):
+                _usage[k] = int(saved.get(k) or 0)
+            _usage["since"] = saved.get("since") or None
+    except FileNotFoundError:
+        pass
+    except Exception as e:  # noqa: BLE001 -- a bad state file must not stop the bridge
+        log.warning("usage state unreadable (%s: %s) — counting from zero",
+                    type(e).__name__, e)
+
+
+def _save_usage_locked() -> None:
+    """Atomic write, called with _usage_lock held. Never raises."""
+    try:
+        os.makedirs(os.path.dirname(settings.usage_state), exist_ok=True)
+        tmp = f"{settings.usage_state}.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(_usage, fh)
+        os.replace(tmp, settings.usage_state)   # atomic — no torn read by /api/usage
+    except Exception as e:  # noqa: BLE001
+        log.warning("usage state not persisted (%s: %s)", type(e).__name__, e)
+
+
+_load_usage()
 
 SYSTEM_PROMPT = (
     "You are a wrist co-pilot. A developer is supervising a Claude Code coding "
@@ -145,6 +182,11 @@ def _record_usage(usage) -> None:
         _usage["calls"] += 1
         _usage["input_tokens"] += int(getattr(usage, "input_tokens", 0) or 0)
         _usage["output_tokens"] += int(getattr(usage, "output_tokens", 0) or 0)
+        if not _usage["since"]:
+            # Stamped on the FIRST ever call, then never again — this is what makes the
+            # totals mean something. A cumulative number with no start date is unreadable.
+            _usage["since"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        _save_usage_locked()
 
 
 def get_usage() -> dict:
@@ -152,12 +194,19 @@ def get_usage() -> dict:
         calls = _usage["calls"]
         it = _usage["input_tokens"]
         ot = _usage["output_tokens"]
+        since = _usage["since"]
     cost = it / 1e6 * settings.suggest_price_in + ot / 1e6 * settings.suggest_price_out
     return {
         "calls": calls,
         "input_tokens": it,
         "output_tokens": ot,
+        # Tokens are MEASURED (straight off the API response). Dollars are NOT: this is
+        # tokens x a configured list price, which is the right shape for an in-app budget
+        # guard and exactly the fabrication a fleet-wide cost collector must refuse. The
+        # basis travels with the number so the two can never be quietly added together.
         "estimated_cost_usd": round(cost, 4),
+        "cost_basis": "list-price estimate, not a metered bill",
+        "since": since,
     }
 
 

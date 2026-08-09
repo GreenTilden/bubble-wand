@@ -83,6 +83,14 @@ class Settings:
             os.getenv("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
             "bubble-wand", "wash-events.jsonl",
         )
+        # Cumulative co-pilot spend. Same state root as the event log, same reasoning.
+        # DURABLE by design: an in-memory counter silently means "since whatever restart
+        # last happened", which is a worse lie than no number at all — you cannot tell a
+        # quiet day from a service bounce. Carries no pane content, only totals.
+        self.usage_state: str = os.getenv("CLAWATCH_USAGE_STATE") or os.path.join(
+            os.getenv("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
+            "bubble-wand", "suggest-usage.json",
+        )
         self.event_max_bytes: int = int(os.getenv("CLAWATCH_EVENT_MAX_BYTES", "5000000"))
         self.event_keep: int = int(os.getenv("CLAWATCH_EVENT_KEEP", "3"))
         # Strict mode RAISES on a schema violation instead of dropping the field.
