@@ -137,20 +137,31 @@ def request_wash(index: int, trigger: str = "manual") -> tuple[str | None, str |
                     reason="not_claude_pane")
         return None, "not_claude_pane"
 
-    if thread.get("hasPrompt") or thread.get("status") == "NEEDS_INPUT":
-        # Guard 1b. maybe_autowash has refused non-IDLE panes since it was written,
-        # and its docstring says why: washing a pane at NEEDS_INPUT answers a
-        # question with /clear. But that check lived in maybe_autowash, and BOTH
-        # paths come through here -- so the guard covered the trigger that ships
-        # DISABLED and not the one an operator actually taps.
+    if thread.get("hasPrompt"):
+        # Guard 1b. The risk is precise: /clear typed at a MENU selects an option,
+        # answering a question nobody read. hasPrompt is the bridge's own tail scan
+        # having actually parsed one.
         #
-        # Guard 4a is not this guard. It re-checks at the re-seed step, which is
-        # after /clear has already been typed into the menu; it stops the final
-        # Enter, not the damage.
+        # It is NOT `status == "NEEDS_INPUT"`, and that distinction is the whole
+        # guard. NEEDS_INPUT comes from the title GLYPH, and Claude Code shows the
+        # same glyph for "idle, awaiting your typing" as for a live menu -- checked
+        # against the operator's own window, where three of four panes read
+        # NEEDS_INPUT with hasPrompt False and not a menu among them. Guarding on
+        # status therefore refuses the ordinary idle pane, which is the pane most
+        # worth washing, and it does so while claiming a menu exists. Shipped that
+        # way in the first cut of this guard; the operator hit it immediately.
         #
-        # WORKING is deliberately still allowed: the wash opens with Escape, which
-        # is the ordinary way to interrupt a running response. Answering a
-        # question you cannot see is the different, unrecoverable case.
+        # Nothing is lost by dropping status: list_threads sets has_prompt AND
+        # forces status to NEEDS_INPUT together when parse_prompt finds a menu, so
+        # hasPrompt is both necessary and sufficient. A capture that FAILS leaves
+        # both unset -- but the glyph cannot distinguish the cases either, so it
+        # adds no coverage there, only false refusals everywhere else.
+        #
+        # Guard 4a is not this guard: it re-checks at the re-seed step, after
+        # /clear has already been typed. It stops the final Enter, not the damage.
+        #
+        # WORKING stays allowed: the wash opens with Escape, the ordinary way to
+        # interrupt a response.
         events.emit("wash.guard_blocked", key, washId=wash_id, paneIndex=index,
                     reason="pane_needs_input", trigger=trigger)
         return None, "pane_needs_input"

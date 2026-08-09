@@ -278,12 +278,30 @@ def test_wash_refuses_a_pane_that_is_mid_question(env, monkeypatch, trigger):
     assert (wash_id, reason) == (None, "pane_needs_input")
 
 
-def test_refusal_holds_on_status_alone_and_on_hasprompt_alone(env, monkeypatch):
-    """Two independent signals set it (title glyph, and the tail-scan override in
-    list_threads). Either one on its own has to be enough, or the guard has a
-    hole exactly where detection is least certain."""
+def test_an_idle_pane_at_the_prompt_is_washable(env, monkeypatch):
+    """THE REGRESSION. status=NEEDS_INPUT with hasPrompt=False is Claude Code
+    sitting at its prompt waiting for you to type -- no menu, and the pane most
+    worth washing. The first cut of this guard also keyed on status and refused
+    it, claiming a menu that was not there; the operator hit it immediately.
+
+    Confirmed against the operator's live window: three of four panes read
+    NEEDS_INPUT with hasPrompt False, glyph ✳, not a menu among them. The glyph
+    is the same for both states, so status carries no information here."""
     from clawatch_bridge import wash
-    for over in ({"hasPrompt": False}, {"status": "WORKING", "hasPrompt": True}):
+    monkeypatch.setattr(wash, "_thread_by_index",
+                        lambda i: _prompted_pane(status="NEEDS_INPUT", hasPrompt=False))
+    monkeypatch.setattr(wash, "_run_wash", lambda wid: None)
+    wash_id, reason = wash.request_wash(2, trigger="manual")
+    assert reason is None and wash_id, "an idle pane at the prompt must be washable"
+
+
+def test_a_real_menu_is_refused_whatever_the_status_says(env, monkeypatch):
+    """hasPrompt is the tail scan having actually parsed a menu, and it is both
+    necessary and sufficient: list_threads sets it and forces NEEDS_INPUT
+    together, so the guard needs nothing else."""
+    from clawatch_bridge import wash
+    for over in ({"status": "WORKING", "hasPrompt": True},
+                 {"status": "IDLE", "hasPrompt": True}):
         monkeypatch.setattr(wash, "_thread_by_index", lambda i, o=over: _prompted_pane(**o))
         assert wash.request_wash(2, trigger="manual")[1] == "pane_needs_input"
 
