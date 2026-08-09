@@ -21,6 +21,16 @@ class Settings:
         # user-controlled string in the tmux target argument.
         self.tmux_window: str = os.getenv("CLAWATCH_TMUX_WINDOW", "dev:1")
 
+        # Panes whose title/label/repo/command contain any of these substrings are
+        # not exposed to ANY client -- absent from the list, 404 when addressed.
+        # Empty default is deliberate: this repo is public, so the mechanism ships
+        # and the patterns stay in the deployed unit. See pane_filter.py.
+        self.excluded_pane_patterns: tuple[str, ...] = tuple(
+            p.strip()
+            for p in os.getenv("CLAWATCH_EXCLUDED_PANE_PATTERNS", "").split(",")
+            if p.strip()
+        )
+
         self.default_tail_lines: int = int(os.getenv("CLAWATCH_TAIL_LINES", "40"))
         self.max_send_len: int = int(os.getenv("CLAWATCH_MAX_SEND_LEN", "4000"))
 

@@ -47,6 +47,11 @@ async def _startup() -> None:
     logging.basicConfig(level=logging.INFO)
     log.info("clawatch-bridge listening on %s:%s (tmux window %s)",
              settings.host, settings.port, settings.tmux_window)
+    # COUNT, never the patterns themselves — a log line is a surface too, and the
+    # patterns name what is being kept off a screen. Logged unconditionally
+    # because "0 exclusion patterns" is the reading that matters: the filter fails
+    # OPEN when unset, so silence would look identical to it working.
+    log.info("pane exclusion: %d pattern(s) active", len(settings.excluded_pane_patterns))
     if settings.token_generated:
         log.warning("No CLAWATCH_TOKEN set — generated one for this run:")
         log.warning("    CLAWATCH_TOKEN=%s", settings.token)
@@ -66,6 +71,22 @@ async def _pane_identity_handler(request: Request, exc: tmux.PaneIdentityError):
     """
     log.warning("pane identity mismatch: %s", exc)
     return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+async def require_pane_allowed(index: int) -> None:
+    """404 an excluded pane, so the list and the addressed routes agree.
+
+    Same 502-not-500 reasoning as require_pane_identity below: as a dependency
+    this runs outside the routes' own `except TmuxError` handlers, so the
+    mapping has to be restated here to keep the contract identical wherever the
+    failure happens.
+    """
+    try:
+        tmux.assert_pane_allowed(index)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except tmux.TmuxError as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 async def require_pane_identity(
@@ -108,7 +129,7 @@ async def get_threads() -> ThreadsResponse:
 @app.get(
     "/api/threads/{index}/tail",
     response_model=TailResponse,
-    dependencies=[Depends(require_token), Depends(require_pane_identity)],
+    dependencies=[Depends(require_token), Depends(require_pane_allowed), Depends(require_pane_identity)],
 )
 async def get_tail(
     index: int,
@@ -151,7 +172,7 @@ async def get_tail(
 @app.post(
     "/api/threads/{index}/send",
     response_model=SendResponse,
-    dependencies=[Depends(require_token), Depends(require_pane_identity)],
+    dependencies=[Depends(require_token), Depends(require_pane_allowed), Depends(require_pane_identity)],
 )
 async def post_send(index: int, body: SendRequest) -> SendResponse:
     try:
@@ -166,7 +187,7 @@ async def post_send(index: int, body: SendRequest) -> SendResponse:
 @app.post(
     "/api/threads/{index}/key",
     response_model=SendResponse,
-    dependencies=[Depends(require_token), Depends(require_pane_identity)],
+    dependencies=[Depends(require_token), Depends(require_pane_allowed), Depends(require_pane_identity)],
 )
 async def post_key(index: int, body: KeyRequest) -> SendResponse:
     try:
@@ -183,7 +204,7 @@ async def post_key(index: int, body: KeyRequest) -> SendResponse:
     "/api/threads/{index}/wash",
     response_model=WashStartResponse,
     status_code=202,
-    dependencies=[Depends(require_token), Depends(require_pane_identity)],
+    dependencies=[Depends(require_token), Depends(require_pane_allowed), Depends(require_pane_identity)],
 )
 async def post_wash(index: int) -> WashStartResponse:
     """Start a context wash. Returns 202 immediately with a washId; poll
@@ -206,7 +227,7 @@ async def post_wash(index: int) -> WashStartResponse:
 @app.get(
     "/api/threads/{index}/wash/{wash_id}",
     response_model=WashStatusResponse,
-    dependencies=[Depends(require_token)],
+    dependencies=[Depends(require_token), Depends(require_pane_allowed)],
 )
 async def get_wash(index: int, wash_id: str) -> WashStatusResponse:
     w = wash_mod.status(wash_id)
@@ -221,7 +242,7 @@ async def get_wash(index: int, wash_id: str) -> WashStatusResponse:
 @app.post(
     "/api/threads/{index}/submit-menu",
     response_model=SubmitMenuResponse,
-    dependencies=[Depends(require_token), Depends(require_pane_identity)],
+    dependencies=[Depends(require_token), Depends(require_pane_allowed), Depends(require_pane_identity)],
 )
 async def post_submit_menu(index: int) -> SubmitMenuResponse:
     """Advance a multi-select menu toward ✔ Submit (Tab, then Enter only when no
@@ -238,7 +259,7 @@ async def post_submit_menu(index: int) -> SubmitMenuResponse:
 @app.post(
     "/api/threads/{index}/suggest",
     response_model=SuggestResponse,
-    dependencies=[Depends(require_token), Depends(require_pane_identity)],
+    dependencies=[Depends(require_token), Depends(require_pane_allowed), Depends(require_pane_identity)],
 )
 async def post_suggest(index: int) -> SuggestResponse:
     try:
@@ -254,7 +275,7 @@ async def post_suggest(index: int) -> SuggestResponse:
 @app.post(
     "/api/threads/{index}/summary",
     response_model=SummaryResponse,
-    dependencies=[Depends(require_token), Depends(require_pane_identity)],
+    dependencies=[Depends(require_token), Depends(require_pane_allowed), Depends(require_pane_identity)],
 )
 async def post_summary(index: int) -> SummaryResponse:
     try:
@@ -269,7 +290,7 @@ async def post_summary(index: int) -> SummaryResponse:
 @app.post(
     "/api/threads/{index}/prompt-summary",
     response_model=SummaryResponse,
-    dependencies=[Depends(require_token), Depends(require_pane_identity)],
+    dependencies=[Depends(require_token), Depends(require_pane_allowed), Depends(require_pane_identity)],
 )
 async def post_prompt_summary(index: int) -> SummaryResponse:
     """One short line describing the DECISION a paused thread is asking for, so the
@@ -290,7 +311,7 @@ async def post_prompt_summary(index: int) -> SummaryResponse:
 @app.post(
     "/api/threads/{index}/digest",
     response_model=DigestResponse,
-    dependencies=[Depends(require_token), Depends(require_pane_identity)],
+    dependencies=[Depends(require_token), Depends(require_pane_allowed), Depends(require_pane_identity)],
 )
 async def post_digest(index: int) -> DigestResponse:
     """Catch-me-up digest for a pane you left running: what it did, where it stands,

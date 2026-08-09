@@ -15,6 +15,7 @@ import re
 import subprocess
 import time
 
+from . import pane_filter
 from .config import settings
 
 TMUX = "tmux"
@@ -357,6 +358,57 @@ def _pane_id_map() -> dict[int, str]:
     return m
 
 
+def _missing_pane_msg(index: int) -> str:
+    """The one wording for 'this index gets you nothing'.
+
+    Shared by the genuinely-absent path and the excluded path on purpose: a
+    separate message for exclusion would confirm the pane exists, which is the
+    fact being withheld. One function so they cannot drift apart later.
+    """
+    return f"pane index {index} does not exist in {settings.tmux_window}"
+
+
+def assert_pane_allowed(index: int) -> None:
+    """Refuse an excluded pane addressed directly by index.
+
+    Dropping excluded panes from `list_threads` hides them from the list and
+    nothing more -- every route here is addressed by INDEX, so a client that
+    already knows (or guesses) the number reaches the pane anyway. The list and
+    the addressed routes have to agree or the filter is decorative.
+
+    Raises ValueError, which the routes already map to 404, and raises it
+    identically for "excluded" and "no such pane": a distinct status for
+    excluded would confirm the pane exists, which is the fact being withheld.
+
+    Cheap on purpose -- one list-panes, no captures, same shape as
+    `_pane_id_map`. A per-request check cannot afford a capture per pane.
+    """
+    if not settings.excluded_pane_patterns:
+        return
+    out = _run([
+        "list-panes", "-t", settings.tmux_window, "-F",
+        "#{pane_index}\t#{pane_current_command}\t#{pane_title}\t#{pane_current_path}",
+    ])
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 3 or not parts[0].strip().isdigit() or int(parts[0]) != index:
+            continue
+        command, title = parts[1], parts[2]
+        cwd = parts[3] if len(parts) > 3 else ""
+        _, _, label = _derive_status(title)
+        if pane_filter.is_excluded(
+            {
+                "title": title,
+                "label": label,
+                "repo": os.path.basename(cwd.rstrip("/")) if cwd else None,
+                "command": command,
+            },
+            settings.excluded_pane_patterns,
+        ):
+            raise ValueError(_missing_pane_msg(index))
+        return
+
+
 def assert_pane_identity(index: int, expected_pane_id: str | None) -> None:
     """Verify that pane `index` is still the pane the caller means.
 
@@ -391,7 +443,7 @@ def _pane_target(index: int) -> str:
     if not _valid_index(index):
         raise ValueError(f"invalid pane index: {index!r}")
     if index not in _current_indices():
-        raise ValueError(f"pane index {index} does not exist in {settings.tmux_window}")
+        raise ValueError(_missing_pane_msg(index))
     return f"{settings.tmux_window}.{index}"
 
 
@@ -470,6 +522,17 @@ def list_threads() -> list[dict]:
         pane_id = parts[3] if len(parts) > 3 else ""
         cwd = parts[4] if len(parts) > 4 else ""
         glyph, status, label = _derive_status(title)
+        repo = os.path.basename(cwd.rstrip("/")) if cwd else None
+        # Excluded panes are dropped HERE, before _do_capture, not filtered out of
+        # the finished list. Filtering afterwards would still have read the pane's
+        # visible contents into this process to parse its status line -- for a pane
+        # the whole point is not to look at. Every field the check reads is already
+        # in hand from list-panes, so nothing is lost by deciding early.
+        if pane_filter.is_excluded(
+            {"title": title, "label": label, "repo": repo, "command": command},
+            settings.excluded_pane_patterns,
+        ):
+            continue
         # Tail-based prompt detection beats the title glyph: if a pane is parked at
         # an interactive menu, surface it as NEEDS_INPUT so it's never hidden
         # (whatever the spinner glyph reads) AND flag it as tappable so the watch can
@@ -504,7 +567,7 @@ def list_threads() -> list[dict]:
                 # Durable identity. paneId survives the whole life of the pane; repo is the
                 # cwd BASENAME only — never the full path, and never pane contents.
                 "paneId": pane_id or None,
-                "repo": os.path.basename(cwd.rstrip("/")) if cwd else None,
+                "repo": repo,
                 "model": (meter or {}).get("model"),
                 "ctxTokens": (meter or {}).get("ctxTokens"),
                 "ctxResolution": (meter or {}).get("ctxResolution"),
