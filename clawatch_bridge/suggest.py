@@ -26,7 +26,10 @@ _client = None  # lazily built; None while suggest is disabled or pkg missing
 # pane content, no prompts) and reloaded at import. Every path here is best-effort: this
 # module's contract is that accounting NEVER breaks a suggestion.
 _usage_lock = threading.Lock()
-_usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "since": None}
+# by_model carries the per-model split that makes the dollar figure honest once more
+# than one tier is in play; the flat totals stay for the API shape and for state files
+# written before the split existed.
+_usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "since": None, "by_model": {}}
 
 
 def _load_usage() -> None:
@@ -38,6 +41,17 @@ def _load_usage() -> None:
             for k in ("calls", "input_tokens", "output_tokens"):
                 _usage[k] = int(saved.get(k) or 0)
             _usage["since"] = saved.get("since") or None
+            # A state file written before per-model accounting has no by_model. Those
+            # tokens were all Haiku (nothing else existed yet), but rather than assert
+            # that, get_usage() prices any unattributed remainder at the co-pilot rate
+            # -- which is the same answer, without inventing a per-model history.
+            by_model = saved.get("by_model")
+            if isinstance(by_model, dict):
+                _usage["by_model"] = {
+                    str(m): {k: int(v.get(k) or 0) for k in ("calls", "input_tokens", "output_tokens")}
+                    for m, v in by_model.items()
+                    if isinstance(v, dict)
+                }
     except FileNotFoundError:
         pass
     except Exception as e:  # noqa: BLE001 -- a bad state file must not stop the bridge
@@ -177,11 +191,22 @@ def _parse(text: str) -> list[str]:
     return [s[:100] for s in out][:3]  # cap length + count (2-3)
 
 
-def _record_usage(usage) -> None:
+def _record_usage(usage, model: str | None = None) -> None:
+    """`model` defaults to the co-pilot model so the three existing call sites are
+    unchanged; the digest passes its own so its tokens are priced at its own rate."""
+    model = model or settings.suggest_model
+    it = int(getattr(usage, "input_tokens", 0) or 0)
+    ot = int(getattr(usage, "output_tokens", 0) or 0)
     with _usage_lock:
         _usage["calls"] += 1
-        _usage["input_tokens"] += int(getattr(usage, "input_tokens", 0) or 0)
-        _usage["output_tokens"] += int(getattr(usage, "output_tokens", 0) or 0)
+        _usage["input_tokens"] += it
+        _usage["output_tokens"] += ot
+        per = _usage["by_model"].setdefault(
+            model, {"calls": 0, "input_tokens": 0, "output_tokens": 0}
+        )
+        per["calls"] += 1
+        per["input_tokens"] += it
+        per["output_tokens"] += ot
         if not _usage["since"]:
             # Stamped on the FIRST ever call, then never again — this is what makes the
             # totals mean something. A cumulative number with no start date is unreadable.
@@ -195,7 +220,20 @@ def get_usage() -> dict:
         it = _usage["input_tokens"]
         ot = _usage["output_tokens"]
         since = _usage["since"]
-    cost = it / 1e6 * settings.suggest_price_in + ot / 1e6 * settings.suggest_price_out
+        by_model = {m: dict(v) for m, v in _usage["by_model"].items()}
+
+    fallback = (settings.suggest_price_in, settings.suggest_price_out)
+    cost = 0.0
+    for model, per in by_model.items():
+        p_in, p_out = settings.model_prices.get(model, fallback)
+        cost += per["input_tokens"] / 1e6 * p_in + per["output_tokens"] / 1e6 * p_out
+    # Anything the per-model split does not account for -- tokens from a state file
+    # written before the split -- is priced at the co-pilot rate rather than dropped.
+    # Dropping it would make the total FALL after an upgrade, which reads as a bug in
+    # the meter and hides real spend.
+    rest_in = max(0, it - sum(v["input_tokens"] for v in by_model.values()))
+    rest_out = max(0, ot - sum(v["output_tokens"] for v in by_model.values()))
+    cost += rest_in / 1e6 * fallback[0] + rest_out / 1e6 * fallback[1]
     return {
         "calls": calls,
         "input_tokens": it,
@@ -207,6 +245,11 @@ def get_usage() -> dict:
         "estimated_cost_usd": round(cost, 4),
         "cost_basis": "list-price estimate, not a metered bill",
         "since": since,
+        # Per-model split. Surfaced because "$0.40 of Haiku" and "$0.40 of Sonnet"
+        # are different facts about how the app is being used, and the flat total
+        # cannot tell them apart. UsageResponse must declare this or pydantic drops
+        # it silently -- the exact defect L14.1's live probe caught.
+        "by_model": by_model,
     }
 
 
@@ -253,6 +296,131 @@ PROMPT_SUMMARY_SYSTEM_PROMPT = (
     "- If you genuinely cannot tell, output: awaiting your choice\n"
     "- Output ONLY the line."
 )
+
+
+DIGEST_SYSTEM_PROMPT = (
+    "A developer has come back to a Claude Code agent they left running and cannot "
+    "remember where they left it. The agent is now PAUSED and waiting -- it is NOT "
+    "asking a multiple-choice question. Given a long stretch of recent terminal "
+    "output, catch the developer up and hand them their next move.\n"
+    "\n"
+    "Return JSON with exactly three keys:\n"
+    '  "recap":   2-4 strings. What this agent actually DID, oldest first. Past '
+    "tense, concrete, one step each: \"ran the 73-test suite, 2 failed in "
+    'test_api\", \"patched the pane gate and re-ran -- green\". Name real files, '
+    "commands, numbers and errors from the output. Skip banners, prompts and "
+    "chrome.\n"
+    '  "state":   ONE string. Where it stands right now and what it is waiting '
+    'for. Max ~20 words.\n'
+    '  "options": 2-4 strings. Things the developer could SAY to the agent to '
+    "move it forward, written as the message itself -- they are typed into the "
+    "send box verbatim. Roughly 4-14 words each. Make them genuinely different "
+    "moves, not three phrasings of \"continue\": at least one that advances the "
+    "work, and, where the output justifies it, one that inspects/verifies "
+    "instead. Ground every one in what is actually on screen.\n"
+    "\n"
+    "Rules:\n"
+    "- If the output is too thin to tell (a bare shell, a fresh pane), return "
+    'empty lists and a "state" of: nothing to catch up on\n'
+    "- Never invent a file, test count, error or command that is not in the "
+    "output. An honest \"cannot tell from the output\" beats a plausible "
+    "fabrication.\n"
+    "- Output ONLY the JSON object. No markdown fence, no commentary."
+)
+
+
+# Structured outputs: the shape is enforced by the API rather than asked for in prose,
+# so a digest cannot come back as a chatty paragraph or a fenced block. _parse_digest
+# below is kept anyway -- a refusal or a max_tokens truncation still yields text that
+# does not conform, and the contract here is that a bad response degrades to empty
+# rather than raising.
+DIGEST_FORMAT = {
+    "type": "json_schema",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "recap": {"type": "array", "items": {"type": "string"}},
+            "state": {"type": "string"},
+            "options": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["recap", "state", "options"],
+        "additionalProperties": False,
+    },
+}
+
+
+def generate_digest(cleaned: list[str]) -> dict:
+    """Catch-me-up digest for a PAUSED pane: what happened, where it stands, what
+    you could say next.
+
+    A different artifact from generate_summary, not a longer one. The summary is
+    3-8 words about a pane that is mid-work and answers "is it still going"; this
+    reads a much deeper tail and answers "what was I doing and what are my moves".
+    That is why it gets its own model tier (settings.digest_model) and its own,
+    larger, tail budget -- and why it is on-demand ONLY. Nothing auto-fires it.
+
+    Degrades to empty lists on every failure, same contract as its siblings: the
+    Mini App renders "nothing to catch up on" rather than an error banner, and a
+    502 from the route still means "we never reached the bridge".
+    """
+    client = _get_client()
+    empty = {"recap": [], "state": "", "options": []}
+    if client is None or not cleaned:
+        return empty
+    tail_text = "\n".join(cleaned[-settings.digest_tail_lines:])[-16000:]
+    try:
+        msg = client.with_options(timeout=settings.digest_timeout).messages.create(
+            model=settings.digest_model,
+            max_tokens=settings.digest_max_tokens,
+            system=DIGEST_SYSTEM_PROMPT,
+            # Adaptive thinking is what Sonnet 5 does when `thinking` is omitted, so
+            # this is the default stated out loud rather than a change -- worth
+            # stating because max_tokens above is sized for thinking + text together.
+            # effort=low keeps a catch-up read from turning into a research project.
+            thinking={"type": "adaptive"},
+            output_config={"effort": "low", "format": DIGEST_FORMAT},
+            messages=[{"role": "user", "content": f"Recent terminal from the coding agent:\n{tail_text}"}],
+        )
+    except Exception as e:  # noqa: BLE001 -- any SDK/HTTP failure degrades to empty
+        log.warning("digest: anthropic call failed: %s", e)
+        return empty
+    try:
+        # Priced at the DIGEST model's rates, not the co-pilot's. Passing the model
+        # through is the whole reason _record_usage takes it: this call is ~4x the
+        # price of a suggestion, and folding it into one flat rate would make the
+        # dollar figure the app displays quietly wrong in the direction of cheap.
+        _record_usage(msg.usage, settings.digest_model)
+    except Exception:  # noqa: BLE001
+        pass
+    text = "".join(b.text for b in msg.content if b.type == "text").strip()
+    return _parse_digest(text)
+
+
+def _parse_digest(text: str) -> dict:
+    """Tolerant of a fenced or chatty response; refuses to guess at a broken one."""
+    out = {"recap": [], "state": "", "options": []}
+    try:
+        s, e = text.find("{"), text.rfind("}")
+        if s == -1 or e <= s:
+            return out
+        data = json.loads(text[s : e + 1])
+    except Exception:  # noqa: BLE001 -- malformed JSON degrades to empty, never raises
+        log.warning("digest: unparseable model output")
+        return out
+    if not isinstance(data, dict):
+        return out
+
+    def _lines(key: str, cap: int, limit: int) -> list[str]:
+        v = data.get(key)
+        if not isinstance(v, list):
+            return []
+        return [" ".join(str(x).split())[:cap] for x in v if str(x).strip()][:limit]
+
+    out["recap"] = _lines("recap", 160, 4)
+    out["options"] = _lines("options", 120, 4)
+    state = data.get("state")
+    out["state"] = " ".join(str(state).split())[:160] if isinstance(state, str) else ""
+    return out
 
 
 def generate_prompt_summary(cleaned: list[str], prompt: dict) -> str:

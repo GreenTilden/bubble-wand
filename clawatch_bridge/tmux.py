@@ -458,7 +458,14 @@ def list_threads() -> list[dict]:
     return threads
 
 
-def _do_capture(target: str, lines: int, scrollback: bool, clean: bool, ansi: bool = False) -> list[str]:
+def _do_capture(
+    target: str,
+    lines: int,
+    scrollback: bool,
+    clean: bool,
+    ansi: bool = False,
+    history: bool = False,
+) -> list[str]:
     """Capture a pane by its already-built target (no re-validation).
 
     `ansi` adds `-e`, which makes tmux emit the pane's colour/attribute escape
@@ -466,12 +473,28 @@ def _do_capture(target: str, lines: int, scrollback: bool, clean: bool, ansi: bo
     the watch strips colour for legibility on a 1.4" screen, and every parser
     in this module reads plain text. Only a client with room for it (the
     Telegram Mini App) asks for colour, and only for DISPLAY.
+
+    `history` adds `-S -{lines}`, and it is what makes `lines` MEAN something
+    above the pane height. Bare `capture-pane -p` returns the VISIBLE pane and
+    nothing else, so the `captured[-lines:]` slice below could only ever shrink
+    the result -- asking a 45-row pane for 100 lines returned 45, silently, and
+    a caller reading the response had no way to tell the difference between
+    "that's all there is" and "we never asked for more". Off by default: the
+    watch asks for 40 and must keep getting exactly the screen it gets today.
+
+    Deliberately NOT the same thing as `scrollback`, which is `-S -` -- the
+    WHOLE buffer, however many thousand lines that is. This one is bounded by
+    the caller's own `lines`.
     """
     args = ["capture-pane", "-p", "-t", target]
     if ansi:
         args.append("-e")
     if scrollback:
         args += ["-S", "-"]  # from the start of the scrollback buffer
+    elif history and lines and lines > 0:
+        # Start `lines` rows ABOVE the visible region. tmux clamps to the start
+        # of the buffer on its own, so a young pane is not an error case.
+        args += ["-S", f"-{int(lines)}"]
     out = _run(args)
     captured = out.splitlines()
     # A tall, mostly-empty pane (e.g. a fresh session) pads the capture with
@@ -487,9 +510,16 @@ def _do_capture(target: str, lines: int, scrollback: bool, clean: bool, ansi: bo
     return captured
 
 
-def capture(index: int, lines: int, scrollback: bool, clean: bool = True, ansi: bool = False) -> list[str]:
+def capture(
+    index: int,
+    lines: int,
+    scrollback: bool,
+    clean: bool = True,
+    ansi: bool = False,
+    history: bool = False,
+) -> list[str]:
     target = _pane_target(index)
-    return _do_capture(target, lines, scrollback, clean, ansi)
+    return _do_capture(target, lines, scrollback, clean, ansi, history)
 
 
 # Fixed allowlist of control keys the watch may send. The client sends only the

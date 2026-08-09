@@ -39,6 +39,42 @@ class Settings:
         self.suggest_price_in: float = float(os.getenv("CLAWATCH_SUGGEST_PRICE_IN", "1.0"))
         self.suggest_price_out: float = float(os.getenv("CLAWATCH_SUGGEST_PRICE_OUT", "5.0"))
 
+        # --- Catch-me-up digest ----------------------------------------------
+        #
+        # A different job from the three co-pilot calls above, so it gets its own
+        # model tier rather than sharing suggest_model. Those answer "is it still
+        # going" in 3-8 words off a 40-line tail; this reads ~150 lines and has to
+        # work out what CHANGED and what the operator's moves are. On-demand only --
+        # nothing auto-fires it, which is what makes the more expensive tier
+        # affordable.
+        self.digest_model: str = os.getenv("CLAWATCH_DIGEST_MODEL", "claude-sonnet-5")
+        self.digest_tail_lines: int = int(os.getenv("CLAWATCH_DIGEST_TAIL_LINES", "150"))
+        # Sonnet 5 runs ADAPTIVE THINKING when `thinking` is omitted, and max_tokens
+        # caps thinking + response text TOGETHER. Sized for both: the visible answer
+        # is ~300 tokens, the rest is headroom so a thoughtful digest cannot truncate
+        # mid-sentence. Sizing this like the 150-token suggest budget would have
+        # produced empty-looking digests on exactly the hard panes that need one.
+        self.digest_max_tokens: int = int(os.getenv("CLAWATCH_DIGEST_MAX_TOKENS", "2000"))
+        # Longer than suggest's 6s: this is a deliberate tap with a spinner, not a
+        # call racing a 30s poll window.
+        self.digest_timeout: float = float(os.getenv("CLAWATCH_DIGEST_TIMEOUT", "30"))
+
+        # Per-model list prices, $/Mtok. The meter used to hold ONE pair, which was
+        # fine while every call was Haiku and silently wrong the moment a second
+        # tier existed -- a Sonnet digest priced at Haiku's rates under-reports by
+        # ~3x, and it under-reports the exact call the operator is deciding whether
+        # to tap again. Unknown models fall back to the digest rate: over-stating a
+        # cost is a recoverable error, under-stating it is the one that misleads.
+        # (Sonnet 5 carries an introductory $2/$10 through 2026-08-31; the standard
+        # $3/$15 is used so the figure does not quietly go under on 09-01.)
+        self.model_prices: dict[str, tuple[float, float]] = {
+            self.suggest_model: (self.suggest_price_in, self.suggest_price_out),
+            self.digest_model: (
+                float(os.getenv("CLAWATCH_DIGEST_PRICE_IN", "3.0")),
+                float(os.getenv("CLAWATCH_DIGEST_PRICE_OUT", "15.0")),
+            ),
+        }
+
         # Bearer token. If unset, generate one and log it at startup so local
         # testing "just works"; in production pass CLAWATCH_TOKEN explicitly.
         token = os.getenv("CLAWATCH_TOKEN")

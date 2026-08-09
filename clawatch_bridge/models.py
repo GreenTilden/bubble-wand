@@ -126,6 +126,19 @@ class UsageResponse(BaseModel):
     # key in get_usage() must be declared here too; test_api_usage_exposes_* pins it.
     cost_basis: str = ""      # tokens are measured; dollars are a list-price estimate
     since: str | None = None  # first-ever recorded call; a cumulative total needs a start
+    # Per-model token split. Declared for the same reason cost_basis and since had to
+    # be: an undeclared key is dropped silently by the response_model, and the route
+    # would serve a shape the unit tests never see because they test the function.
+    by_model: dict[str, dict[str, int]] = {}
+
+
+class DigestResponse(BaseModel):
+    """Catch-me-up digest for a paused pane. All three fields degrade to empty on any
+    Haiku/Sonnet failure -- an empty digest is 'nothing to catch up on', while a 502
+    from the route means the bridge was never reached. They must stay tellable apart."""
+    recap: list[str] = []
+    state: str = ""
+    options: list[str] = []
 
 
 class SetupRequest(BaseModel):

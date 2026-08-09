@@ -19,6 +19,7 @@ from . import tmux, suggest, setup as setup_mod, pressure, wash as wash_mod
 from .config import settings
 from .auth import require_token
 from .models import (
+    DigestResponse,
     KeyRequest,
     PromptInfo,
     SendRequest,
@@ -247,6 +248,35 @@ async def post_prompt_summary(index: int) -> SummaryResponse:
     if not parsed:
         return SummaryResponse(summary="")
     return SummaryResponse(summary=suggest.generate_prompt_summary(captured, parsed))
+
+
+@app.post(
+    "/api/threads/{index}/digest",
+    response_model=DigestResponse,
+    dependencies=[Depends(require_token)],
+)
+async def post_digest(index: int) -> DigestResponse:
+    """Catch-me-up digest for a pane you left running: what it did, where it stands,
+    what you could say next.
+
+    The only route here that reads with `history=True` -- it asks tmux for lines ABOVE
+    the visible screen, because "what has this been doing" is a question the current
+    screen cannot answer. Everything else deliberately reads the screen only.
+
+    Deliberately NOT gated on pane status. Whether a pane counts as "paused and not
+    mid-question" is a judgement the client already makes to decide whether to offer
+    the button, and duplicating it here would mean two definitions that can disagree.
+    The bridge answers what it is asked; the Mini App decides when to ask.
+    """
+    try:
+        captured = tmux.capture(
+            index, lines=settings.digest_tail_lines, scrollback=False, history=True
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except tmux.TmuxError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return DigestResponse(**suggest.generate_digest(captured))
 
 
 @app.get("/api/usage", response_model=UsageResponse, dependencies=[Depends(require_token)])
