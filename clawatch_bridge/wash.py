@@ -137,6 +137,24 @@ def request_wash(index: int, trigger: str = "manual") -> tuple[str | None, str |
                     reason="not_claude_pane")
         return None, "not_claude_pane"
 
+    if thread.get("hasPrompt") or thread.get("status") == "NEEDS_INPUT":
+        # Guard 1b. maybe_autowash has refused non-IDLE panes since it was written,
+        # and its docstring says why: washing a pane at NEEDS_INPUT answers a
+        # question with /clear. But that check lived in maybe_autowash, and BOTH
+        # paths come through here -- so the guard covered the trigger that ships
+        # DISABLED and not the one an operator actually taps.
+        #
+        # Guard 4a is not this guard. It re-checks at the re-seed step, which is
+        # after /clear has already been typed into the menu; it stops the final
+        # Enter, not the damage.
+        #
+        # WORKING is deliberately still allowed: the wash opens with Escape, which
+        # is the ordinary way to interrupt a running response. Answering a
+        # question you cannot see is the different, unrecoverable case.
+        events.emit("wash.guard_blocked", key, washId=wash_id, paneIndex=index,
+                    reason="pane_needs_input", trigger=trigger)
+        return None, "pane_needs_input"
+
     with _LOCK:
         if index in _INFLIGHT:
             events.emit("wash.guard_blocked", key, washId=wash_id, paneIndex=index,

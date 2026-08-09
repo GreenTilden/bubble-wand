@@ -131,7 +131,12 @@ SCHEMA: dict[str, dict[str, object]] = {
         "washId": IDENT, "paneIndex": INT,
         "reason": ENUM("not_claude_pane", "pane_missing", "pane_changed",
                        "wash_in_flight", "wash_disabled", "too_many_inflight",
-                       "index_invalid"),
+                       "index_invalid", "pane_needs_input"),
+        # Which trigger was refused (fields validate only when present, so this
+        # is optional like every other). The manual path had no NEEDS_INPUT guard
+        # at all, so "how often does an operator try to wash a pane that is
+        # mid-question" was unanswerable -- the attempt left no trace.
+        "trigger": _TRIGGER,
     },
     "wash.cleared": {"washId": IDENT, "attempts": INT, "elapsedMs": INT},
     "wash.clear_failed": {

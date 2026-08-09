@@ -252,3 +252,61 @@ def test_autowash_when_enabled_only_touches_idle_hard_panes(env, monkeypatch):
         {"index": 4, "status": "IDLE", "ctxTokens": 999_999},         # the only valid target
     ])
     assert called == [4]
+
+
+# --- Guard 1b: the manual path had no NEEDS_INPUT check at all ---------------
+#
+# maybe_autowash has refused non-IDLE panes since it was written and says why in
+# its own docstring: washing a pane at NEEDS_INPUT answers a question with
+# /clear. That check lived in maybe_autowash. BOTH triggers come through
+# request_wash -- so the guard covered the path that ships DISABLED, and not the
+# one an operator taps from the FAB. The only NEEDS_INPUT test in this file
+# before now exercised maybe_autowash, which is why nothing failed.
+
+def _prompted_pane(**over):
+    t = {"index": 2, "paneId": "%46", "command": "claude", "repo": "dellatech",
+         "status": "NEEDS_INPUT", "hasPrompt": True, "ctxTokens": 90_000}
+    t.update(over)
+    return t
+
+
+@pytest.mark.parametrize("trigger", ["manual", "auto"])
+def test_wash_refuses_a_pane_that_is_mid_question(env, monkeypatch, trigger):
+    from clawatch_bridge import wash
+    monkeypatch.setattr(wash, "_thread_by_index", lambda i: _prompted_pane())
+    wash_id, reason = wash.request_wash(2, trigger=trigger)
+    assert (wash_id, reason) == (None, "pane_needs_input")
+
+
+def test_refusal_holds_on_status_alone_and_on_hasprompt_alone(env, monkeypatch):
+    """Two independent signals set it (title glyph, and the tail-scan override in
+    list_threads). Either one on its own has to be enough, or the guard has a
+    hole exactly where detection is least certain."""
+    from clawatch_bridge import wash
+    for over in ({"hasPrompt": False}, {"status": "WORKING", "hasPrompt": True}):
+        monkeypatch.setattr(wash, "_thread_by_index", lambda i, o=over: _prompted_pane(**o))
+        assert wash.request_wash(2, trigger="manual")[1] == "pane_needs_input"
+
+
+def test_working_pane_without_a_prompt_is_still_washable(env, monkeypatch):
+    """WORKING is NOT blocked: the wash opens with Escape, which is the ordinary
+    way to interrupt a running response. Answering an unseen question is the
+    different, unrecoverable case -- so the guard must not quietly widen."""
+    from clawatch_bridge import wash
+    monkeypatch.setattr(wash, "_thread_by_index",
+                        lambda i: _prompted_pane(status="WORKING", hasPrompt=False))
+    monkeypatch.setattr(wash, "_run_wash", lambda wid: None)
+    wash_id, reason = wash.request_wash(2, trigger="manual")
+    assert reason is None and wash_id
+
+
+def test_the_refusal_is_a_countable_event(env, monkeypatch):
+    """Every other rejection here emits wash.guard_blocked so a wash that never
+    ran is a fact rather than a gap in the series. This one has to as well."""
+    from clawatch_bridge import wash
+    monkeypatch.setattr(wash, "_thread_by_index", lambda i: _prompted_pane())
+    wash.request_wash(2, trigger="manual")
+    rows = [json.loads(l) for l in env.read_text().splitlines() if l.strip()]
+    blocked = [r for r in rows if r.get("event") == "wash.guard_blocked"]
+    assert blocked and blocked[-1]["reason"] == "pane_needs_input"
+    assert blocked[-1]["trigger"] == "manual"
