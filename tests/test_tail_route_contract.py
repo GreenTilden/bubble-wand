@@ -144,3 +144,63 @@ def test_before_zero_takes_the_untouched_live_path(paging_client):
 def test_negative_before_is_a_422_not_a_silent_zero(paging_client):
     c, _ = paging_client
     assert c.get("/api/threads/1/tail?lines=150&before=-1").status_code == 422
+
+
+# --- the history route (L22) ----------------------------------------------
+#
+# Same reason as everything above it: the paging maths and the transcript reader
+# are unit-tested, and none of that would notice the route dropping `before` or
+# the response model eating `confidence`. Confidence is the one that matters --
+# a client that cannot see it presents a guessed session as this pane's history.
+
+
+@pytest.fixture
+def history_client(monkeypatch):
+    seen = {}
+
+    def fake_page(cwd, pane_text, lines, before):
+        seen.update(cwd=cwd, lines=lines, before=before, pane_text=pane_text)
+        return (["older line"], True, {"session": "abc123", "confidence": "matched"})
+
+    monkeypatch.setattr(tmux, "pane_cwd", lambda index: "/home/x/repo")
+    monkeypatch.setattr(tmux, "capture", lambda *a, **k: ["screen line"])
+    monkeypatch.setattr(tmux, "pane_address", lambda index: f"dev:1.{index}")
+    monkeypatch.setattr(main.transcript, "page", fake_page)
+    c = TestClient(main.app)
+    c.headers.update({"Authorization": f"Bearer {settings.token}"})
+    return c, seen
+
+
+def test_history_forwards_before_and_returns_the_page(history_client):
+    c, seen = history_client
+    body = c.get("/api/threads/2/history?lines=50&before=100").json()
+    assert seen["before"] == 100
+    assert seen["lines"] == 50
+    assert body["lines"] == ["older line"]
+    assert body["hasOlder"] is True
+
+
+def test_history_reports_which_session_and_how_sure(history_client):
+    c, _ = history_client
+    body = c.get("/api/threads/2/history").json()
+    assert body["session"] == "abc123"
+    assert body["confidence"] == "matched"
+
+
+def test_history_reads_the_cwd_server_side(history_client):
+    """No client-supplied path reaches the filesystem, and the screen used to
+    disambiguate is captured here rather than sent -- otherwise a caller could
+    fish for a transcript by guessing at its contents."""
+    c, seen = history_client
+    c.get("/api/threads/2/history")
+    assert seen["cwd"] == "/home/x/repo"
+    assert seen["pane_text"] == "screen line"
+
+
+def test_history_on_a_missing_pane_is_404(monkeypatch):
+    def boom(index):
+        raise ValueError("pane index 9 does not exist in dev:1")
+    monkeypatch.setattr(tmux, "pane_cwd", boom)
+    c = TestClient(main.app)
+    c.headers.update({"Authorization": f"Bearer {settings.token}"})
+    assert c.get("/api/threads/9/history").status_code == 404

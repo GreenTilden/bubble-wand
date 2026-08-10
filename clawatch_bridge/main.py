@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from . import tmux, suggest, setup as setup_mod, pressure, wash as wash_mod
+from . import tmux, suggest, setup as setup_mod, pressure, wash as wash_mod, transcript
 from .config import settings
 from .auth import require_token
 from .models import (
@@ -33,6 +33,7 @@ from .models import (
     SummaryResponse,
     UsageResponse,
     TailResponse,
+    HistoryResponse,
     Thread,
     ThreadsResponse,
 )
@@ -196,6 +197,61 @@ async def get_tail(
         prompt=PromptInfo(**parsed) if parsed else None,
         before=before,
         hasOlder=has_older,
+    )
+
+
+@app.get(
+    "/api/threads/{index}/history",
+    response_model=HistoryResponse,
+    dependencies=[Depends(require_token), Depends(require_pane_allowed), Depends(require_pane_identity)],
+)
+async def get_history(
+    index: int,
+    lines: int = Query(default=80, ge=1, le=400),
+    before: int = Query(default=0, ge=0, le=100000),
+) -> HistoryResponse:
+    """Real scrollback, from the transcript rather than from tmux.
+
+    The tail routes read a pane. This reads what Claude WROTE, which for a pane on
+    the alternate screen is the only record that exists above the visible rows --
+    see transcript.py for the measurement. It is also better than the buffer we
+    thought we had: unwrapped text, so the client re-flows it to its own width.
+
+    Behind the same three gates as every pane route, and the identity gate matters
+    MORE here, not less: serving the wrong pane's history is a privacy failure
+    rather than a display glitch. The cwd is read server-side from the live pane;
+    no client-supplied path reaches the filesystem.
+    """
+    try:
+        cwd = tmux.pane_cwd(index)
+        # The pane's current screen is the discriminator between two sessions in
+        # the same repo. Captured here, never sent by the client -- a client-
+        # supplied "screen" would let a caller fish for a transcript by guessing
+        # at its content.
+        pane_text = "\n".join(tmux.capture(index, lines=60, scrollback=False))
+        address = tmux.pane_address(index)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except tmux.TmuxError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    try:
+        rows, has_older, meta = transcript.page(
+            cwd, pane_text, lines=lines, before=before
+        )
+    except OSError as e:
+        # A transcript that cannot be read is a 502 rather than an empty 200:
+        # "no history" and "history unreadable" are different facts and the
+        # client's answer differs (say so, vs disable the control).
+        raise HTTPException(status_code=502, detail=f"transcript unreadable: {e}")
+    return HistoryResponse(
+        index=index,
+        pane=address,
+        lines=rows,
+        capturedAt=datetime.now(timezone.utc).isoformat(),
+        before=before,
+        hasOlder=has_older,
+        session=meta.get("session"),
+        confidence=meta.get("confidence", "none"),
     )
 
 

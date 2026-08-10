@@ -737,6 +737,21 @@ def capture(
     return _do_capture(target, lines, scrollback, clean, ansi, history)
 
 
+def pane_cwd(index: int) -> str:
+    """The pane's working directory -- a FULL path, unlike the `repo` basename the
+    thread list carries.
+
+    The list deliberately exposes only the basename (a path is estate detail the
+    phone does not need). History needs the whole thing, because it is the key
+    into Claude's per-project transcript directory, and it stays server-side: the
+    client never sends or sees it.
+    """
+    row = _pane_row(index)
+    if row is None or not row.get("path"):
+        raise ValueError(_missing_pane_msg(index))
+    return row["path"]
+
+
 # Growth budget for capture_page. Each try doubles the raw request, so 4 tries
 # covers a 16x cleaning ratio -- far past anything observed (the worst live pane
 # measured ~1.1x). Bounded because this runs on an operator tap and a runaway

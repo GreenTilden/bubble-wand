@@ -190,3 +190,25 @@ class SetupResponse(BaseModel):
     token: str
     connectUrl: str
     note: str = ""
+
+
+class HistoryResponse(BaseModel):
+    """Paged session history, read from Claude's transcript rather than tmux.
+
+    `lines` are LOGICAL lines -- a paragraph arrives whole, however long -- so the
+    client wraps them to its own width. That is the property a captured pane can
+    never have, and the reason this route exists at all.
+    """
+    index: int
+    pane: str
+    lines: list[str]
+    capturedAt: str
+    before: int = 0
+    hasOlder: bool = False
+    # Which transcript this came from, and how sure we are it is THIS pane's.
+    # "matched" = the pane's own screen was found in the file · "only" = nothing
+    # to disambiguate · "mtime" = guessed by recency, and the client must say so
+    # · "none" = no transcript for this cwd at all.
+    session: str | None = None
+    confidence: str = "none"
+
