@@ -136,10 +136,85 @@ def reset_client() -> None:
     _client = None
 
 
+_warm_in_flight = threading.Lock()  # at most one background warm at a time
+
+
+def _warm_local_model() -> None:
+    """Fire-and-forget model load, spawned when a local call times out.
+
+    Ollama cancels a cold load when the requester disconnects, so the timed-out
+    suggest call warms nothing by itself — the live probe that found this paid
+    the cloud fallback three taps in a row. This thread holds its connection
+    for as long as the load takes; the tap that spawned it was already served
+    by the fallback, and the next one is local."""
+    if not _warm_in_flight.acquire(blocking=False):
+        return  # a warm is already running; a second would just queue behind it
+
+    def _run():
+        import urllib.request
+        try:
+            req = urllib.request.Request(
+                f"http://{settings.ollama_host}/api/generate",
+                data=json.dumps({"model": settings.ollama_model, "prompt": "",
+                                 "keep_alive": settings.ollama_keep_alive}).encode(),
+                headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=300).read()
+            log.info("suggest: local model warmed")
+        except Exception as e:  # noqa: BLE001 -- best-effort; next tap falls back again
+            log.warning("suggest: local warm failed: %s", e)
+        finally:
+            _warm_in_flight.release()
+
+    threading.Thread(target=_run, daemon=True, name="ollama-warm").start()
+
+
+def _ollama_suggestions(ctx: str) -> list[str]:
+    """The local backend. Same contract as every path in this module: any
+    failure — host down, model evicted and cold-loading past the timeout,
+    unparseable output — returns [] and the caller decides what happens next.
+    No usage recording: the meter counts cloud spend, and a local call is the
+    absence of exactly that."""
+    import urllib.error
+    import urllib.request
+
+    payload = {
+        "model": settings.ollama_model,
+        "stream": False,
+        "think": False,
+        "keep_alive": settings.ollama_keep_alive,
+        "options": {"temperature": 0, "num_predict": settings.suggest_max_tokens},
+        "messages": [{"role": "system", "content": SYSTEM_PROMPT},
+                     {"role": "user", "content": ctx}],
+    }
+    for attempt in (0, 1):
+        try:
+            req = urllib.request.Request(
+                f"http://{settings.ollama_host}/api/chat",
+                data=json.dumps(payload).encode(),
+                headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=settings.suggest_timeout) as r:
+                body = json.loads(r.read().decode())
+            return _parse(((body.get("message") or {}).get("content") or "").strip())
+        except urllib.error.HTTPError as e:  # noqa: PERF203
+            # Model families disagree on the think field's PRESENCE (llama-class
+            # 400s when it is set, qwen-class needs it false, gpt-oss rejects
+            # disabling) — retry once without it. Thinking tokens then race the
+            # same timeout they would cost production.
+            if attempt == 0 and "think" in payload:
+                log.info("suggest: local backend rejected think field (%s) — retrying without", e.code)
+                payload.pop("think")
+                continue
+            log.warning("suggest: local backend HTTP %s", e.code)
+            return []
+        except Exception as e:  # noqa: BLE001 -- timeout/conn-refused/bad JSON all degrade
+            if isinstance(e, TimeoutError) or "timed out" in str(e):
+                _warm_local_model()  # a cold load missed the window; warm for the next tap
+            log.warning("suggest: local backend failed: %s", e)
+            return []
+    return []
+
+
 def generate_suggestions(cleaned: list[str], prompt: dict | None) -> list[str]:
-    client = _get_client()
-    if client is None:
-        return []
     if not cleaned and not prompt:  # nothing on screen -> no call, no cost
         return []
 
@@ -154,6 +229,16 @@ def generate_suggestions(cleaned: list[str], prompt: dict | None) -> list[str]:
         )
     else:
         ctx = f"Recent terminal from the coding agent:\n{tail_text}"
+
+    if settings.suggest_backend == "ollama":
+        out = _ollama_suggestions(ctx)
+        if out:
+            return out
+        log.info("suggest: local backend produced nothing — falling back to cloud")
+
+    client = _get_client()
+    if client is None:
+        return []
 
     try:
         msg = client.with_options(timeout=settings.suggest_timeout).messages.create(

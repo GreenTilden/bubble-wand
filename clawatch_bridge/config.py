@@ -72,6 +72,25 @@ class Settings:
         self.suggest_price_in: float = float(os.getenv("CLAWATCH_SUGGEST_PRICE_IN", "1.0"))
         self.suggest_price_out: float = float(os.getenv("CLAWATCH_SUGGEST_PRICE_OUT", "5.0"))
 
+        # --- Local suggest backend (Ollama) ----------------------------------
+        #
+        # "anthropic" (default) or "ollama". With "ollama", momentum suggestions
+        # are served by a local model on the configured host and the cloud model
+        # above becomes the FALLBACK, taken whenever the local call fails, times
+        # out, or parses to nothing. Only the suggest call routes locally: the
+        # summary/prompt-summary/digest calls are unchanged. The suggest_timeout
+        # applies to the local call too — a model that has been evicted and needs
+        # a cold load will miss the window and fall back to cloud for that tap;
+        # a background warm request (which HOLDS its connection — the server
+        # cancels a load when the requester disconnects, so the timed-out call
+        # itself warms nothing) loads the model for the taps that follow.
+        self.suggest_backend: str = os.getenv("CLAWATCH_SUGGEST_BACKEND", "anthropic")
+        self.ollama_host: str = os.getenv("CLAWATCH_OLLAMA_HOST", "127.0.0.1:11434")
+        self.ollama_model: str = os.getenv("CLAWATCH_OLLAMA_MODEL", "qwen3:14b")
+        # Passed on every call; how long the server keeps the model resident
+        # after it. Ollama duration string ("30m", "-1" = forever).
+        self.ollama_keep_alive: str = os.getenv("CLAWATCH_OLLAMA_KEEP_ALIVE", "30m")
+
         # --- Catch-me-up digest ----------------------------------------------
         #
         # A different job from the three co-pilot calls above, so it gets its own
