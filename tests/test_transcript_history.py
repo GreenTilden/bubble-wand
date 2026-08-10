@@ -236,3 +236,150 @@ def test_a_torn_first_record_is_dropped_only_when_we_seeked(projects, tmp_path):
     assert T.render(T._read_rows(p)) == ["first", "second"]          # whole file
     assert T.render(T._read_rows(p, max_bytes=100))[-1] == "second"   # seeked
     assert "first" not in T.render(T._read_rows(p, max_bytes=100))
+
+
+# --- the memoised pick, and why a TTL alone is not enough --------------------
+#
+# della cycle-66 L23. Read-back was a TAP: one pick, ~90ms, invisible. The live
+# view polls the same route every 4s for as long as the phone is open, and a pick
+# re-reads up to 8 transcripts to score them. Cached -- but the invalidation is
+# the part with teeth, because a stale pick serves the wrong session, and a
+# transcript that has stopped growing renders as a pane that has gone quiet.
+
+
+@pytest.fixture(autouse=True)
+def _clear_pick_cache():
+    T._pick_cache.clear()
+    yield
+    T._pick_cache.clear()
+
+
+# Enough distinctive vocabulary to clear _MATCH_FLOOR (3 tokens of 10+ chars).
+# Thinner fixtures than this fall through to "mtime" and every assertion below
+# then tests the mtime guess instead of the matcher -- which is how the first cut
+# of these tests "passed the wrong thing".
+PANE_A = ("editing clawatch_bridge/transcript.py — pick_cached, _PICK_CACHE_MAX — "
+          "running tests/test_transcript_history.py")
+PANE_B = ("household/sturkel-miniapp/static/app.js — renderHistoryLabel, "
+          "paintTranscript — running tests/test_readback_mode.py")
+
+
+def _two_sessions(projects, cwd="/repo/x"):
+    """Two sessions in one repo -- the case the content match exists for."""
+    import os
+    a = _session(projects, cwd, "aaaa", [
+        _assistant("editing clawatch_bridge/transcript.py, adding pick_cached"),
+        _tool("Bash", command="pytest tests/test_transcript_history.py -q"),
+        _result("_PICK_CACHE_MAX is 64; 25 passed"),
+    ])
+    b = _session(projects, cwd, "bbbb", [
+        _assistant("household/sturkel-miniapp/static/app.js — renderHistoryLabel"),
+        _tool("Bash", command="npm test -- tests/test_readback_mode.py"),
+        _result("paintTranscript ok"),
+    ])
+    os.utime(a, (1000, 1000))
+    os.utime(b, (2000, 2000))   # b is newest, so an mtime guess picks b
+    return a, b
+
+
+def test_pick_is_memoised_per_pane(projects, monkeypatch):
+    """A second poll for the same pane must not re-score the candidate files."""
+    a, _b = _two_sessions(projects)
+    pane = PANE_A
+    picks = []
+    real = T.pick
+    monkeypatch.setattr(T, "pick", lambda *args: picks.append(1) or real(*args))
+
+    first = T.pick_cached("/repo/x", pane, "%7")
+    second = T.pick_cached("/repo/x", pane, "%7")
+
+    assert first == second
+    assert first[0].name == a.name
+    assert first[1] == "matched"
+    assert len(picks) == 1, "the second poll re-read the transcripts"
+
+
+def test_a_new_transcript_invalidates_the_cache(projects):
+    """/clear starts a NEW file and stops appending to the old one.
+
+    A TTL-only cache would keep painting the abandoned transcript for its whole
+    window -- and a transcript that no longer grows looks exactly like a pane that
+    has nothing to say, which is the failure shape this route was built to end.
+    """
+    _a, _b = _two_sessions(projects)
+    pane = PANE_A
+    first = T.pick_cached("/repo/x", pane, "%7")
+    assert first[0].name == "aaaa.jsonl"
+
+    # The operator runs /clear: a new session file, whose content the pane now shows.
+    import os
+    c = _session(projects, "/repo/x", "cccc", [
+        _assistant("fresh session, still clawatch_bridge/transcript.py and pick_cached"),
+        _tool("Bash", command="pytest tests/test_transcript_history.py -q"),
+        _result("_PICK_CACHE_MAX unchanged"),
+    ])
+    os.utime(c, (3000, 3000))
+
+    again = T.pick_cached("/repo/x", pane, "%7")
+    assert again[0].name == "cccc.jsonl", "the cache outlived the session it named"
+
+
+def test_cache_is_keyed_per_pane_not_per_repo(projects):
+    """Two panes in one repo is the normal case, and the reason pick scores content.
+
+    Keying on cwd alone would hand the second pane the first pane's answer -- the
+    exact privacy failure, arrived at through the cache instead of through the
+    matcher.
+    """
+    _two_sessions(projects)
+    pane_a = PANE_A
+    pane_b = PANE_B
+
+    got_a = T.pick_cached("/repo/x", pane_a, "%7")
+    got_b = T.pick_cached("/repo/x", pane_b, "%9")
+
+    assert got_a[0].name == "aaaa.jsonl"
+    assert got_b[0].name == "bbbb.jsonl"
+
+
+def test_no_pane_key_falls_through_uncached(projects):
+    """An unkeyable request is served correctly and uncached, never on a shared key."""
+    _two_sessions(projects)
+    pane = PANE_A
+    got = T.pick_cached("/repo/x", pane, None)
+    assert got[0].name == "aaaa.jsonl"
+    assert T._pick_cache == {}
+
+
+def test_page_passes_the_pane_key_through(projects):
+    """The route's plumbing, pinned: page() must key the cache, not bypass it."""
+    _two_sessions(projects)
+    pane = PANE_A
+    rows, _older, meta = T.page("/repo/x", pane, lines=10, before=0, pane_key="%7")
+    assert meta["confidence"] == "matched"
+    assert any("transcript.py" in r for r in rows)
+    assert ("/repo/x", "%7") in T._pick_cache
+
+
+# --- the property the whole fix rests on ------------------------------------
+
+
+def test_match_survives_a_hard_wrapped_pane(projects):
+    """The live view exists BECAUSE the pane can be 26 columns wide. If the matcher
+    needed a wide pane, it would fail exactly when it is needed.
+
+    It survives because the score is substring containment over long tokens: a
+    path broken across two 26-column lines leaves a PREFIX that is still a
+    substring of the whole path in the transcript. Measured on all four live panes
+    at 26 columns before this was relied on; pinned here so a future matcher that
+    switches to exact-token equality cannot pass silently.
+    """
+    import textwrap
+    _a, _b = _two_sessions(projects)
+    wide = PANE_A
+    narrow = "\n".join(textwrap.wrap(wide, 26, break_long_words=True, break_on_hyphens=False))
+    assert max(len(l) for l in narrow.splitlines()) <= 26
+
+    got = T.pick_cached("/repo/x", narrow, "%7")
+    assert got[1] == "matched"
+    assert got[0].name == "aaaa.jsonl"

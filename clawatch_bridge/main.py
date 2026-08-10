@@ -230,13 +230,16 @@ async def get_history(
         # at its content.
         pane_text = "\n".join(tmux.capture(index, lines=60, scrollback=False))
         address = tmux.pane_address(index)
+        # Cache key for the transcript pick, not an identity assertion -- the
+        # assertion already ran in require_pane_identity before this body.
+        pane_key = tmux.pane_id(index)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except tmux.TmuxError as e:
         raise HTTPException(status_code=502, detail=str(e))
     try:
         rows, has_older, meta = transcript.page(
-            cwd, pane_text, lines=lines, before=before
+            cwd, pane_text, lines=lines, before=before, pane_key=pane_key
         )
     except OSError as e:
         # A transcript that cannot be read is a 502 rather than an empty 200:

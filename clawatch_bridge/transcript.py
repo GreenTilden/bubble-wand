@@ -37,6 +37,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from pathlib import Path
 
 # Where Claude keeps transcripts. Overridable for tests; not a client-facing knob.
@@ -271,11 +272,64 @@ def pick(cwd: str, pane_text: str) -> tuple[Path | None, str]:
     return cands[0], "mtime"
 
 
+# Memoised pick. Read-back was a tap: one pick, 8 files, ~90ms, nobody noticed.
+# The live view polls this route every 4s for as long as the phone is open, and
+# `pick` reads up to 8 transcripts of half a megabyte each to score them -- ~4MB
+# of re-read per tick, to re-derive an answer that changes only when the operator
+# runs /clear. So it is cached, but NOT on a timer alone: a stale pick is a wrong
+# session, which is the one failure this module exists to prevent.
+_PICK_TTL_S = 30.0
+_PICK_CACHE_MAX = 64
+_pick_cache: dict[tuple[str, str], dict] = {}
+
+
+def pick_cached(cwd: str, pane_text: str, pane_key: str | None) -> tuple[Path | None, str]:
+    """`pick`, memoised per pane, with an invalidation that survives /clear.
+
+    Two conditions drop the entry, and the second is the load-bearing one:
+      - age, so a mis-pick cannot outlive half a minute of being wrong; and
+      - a change in the SET of candidate filenames, which is exactly what /clear
+        does -- it starts a new transcript under the same project directory while
+        the old one stops growing. A TTL alone would leave the live view painting
+        a transcript that stopped being appended to, and a frozen pane looks like
+        a quiet pane rather than like a bug (the L22 failure shape, again).
+
+    Keyed on pane_key (the tmux `%N` pane id), never on cwd alone: two panes in
+    one repo is the normal case here and the whole reason `pick` scores content.
+    Falls straight through to `pick` when the caller has no pane id -- an
+    unkeyable request is served correctly and uncached rather than sharing a
+    neighbour's entry.
+    """
+    if not pane_key:
+        return pick(cwd, pane_text)
+    key = (cwd, pane_key)
+    now = time.monotonic()
+    names = frozenset(p.name for p in candidates(cwd))
+    hit = _pick_cache.get(key)
+    if (
+        hit is not None
+        and now - hit["at"] < _PICK_TTL_S
+        and hit["names"] == names
+        and (hit["path"] is None or hit["path"].exists())
+    ):
+        return hit["path"], hit["confidence"]
+    path, confidence = pick(cwd, pane_text)
+    # Panes die and are recreated, so keys accumulate over a long-lived server.
+    # A flat clear at the cap, rather than an LRU: the population is a handful of
+    # panes, so the cap is only ever reached by churn, and re-picking a live pane
+    # costs one request.
+    if len(_pick_cache) >= _PICK_CACHE_MAX:
+        _pick_cache.clear()
+    _pick_cache[key] = {"path": path, "confidence": confidence, "at": now, "names": names}
+    return path, confidence
+
+
 def page(
     cwd: str,
     pane_text: str,
     lines: int,
     before: int,
+    pane_key: str | None = None,
 ) -> tuple[list[str], bool, dict]:
     """A `lines`-tall window of rendered history ending `before` lines above the end.
 
@@ -285,7 +339,7 @@ def page(
     """
     if before < 0:
         raise ValueError("before must be >= 0")
-    path, confidence = pick(cwd, pane_text)
+    path, confidence = pick_cached(cwd, pane_text, pane_key)
     meta = {"session": path.stem if path else None, "confidence": confidence}
     if path is None:
         return [], False, meta

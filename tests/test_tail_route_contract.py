@@ -158,13 +158,15 @@ def test_negative_before_is_a_422_not_a_silent_zero(paging_client):
 def history_client(monkeypatch):
     seen = {}
 
-    def fake_page(cwd, pane_text, lines, before):
-        seen.update(cwd=cwd, lines=lines, before=before, pane_text=pane_text)
+    def fake_page(cwd, pane_text, lines, before, pane_key=None):
+        seen.update(cwd=cwd, lines=lines, before=before, pane_text=pane_text,
+                    pane_key=pane_key)
         return (["older line"], True, {"session": "abc123", "confidence": "matched"})
 
     monkeypatch.setattr(tmux, "pane_cwd", lambda index: "/home/x/repo")
     monkeypatch.setattr(tmux, "capture", lambda *a, **k: ["screen line"])
     monkeypatch.setattr(tmux, "pane_address", lambda index: f"dev:1.{index}")
+    monkeypatch.setattr(tmux, "pane_id", lambda index: "%42")
     monkeypatch.setattr(main.transcript, "page", fake_page)
     c = TestClient(main.app)
     c.headers.update({"Authorization": f"Bearer {settings.token}"})
@@ -178,6 +180,17 @@ def test_history_forwards_before_and_returns_the_page(history_client):
     assert seen["lines"] == 50
     assert body["lines"] == ["older line"]
     assert body["hasOlder"] is True
+
+
+def test_history_keys_the_transcript_cache_on_the_pane_id(history_client):
+    """The live view polls this route every 4s, so the pick is memoised -- and the
+    key has to be the pane, not the repo. Two panes in one repo is the normal case;
+    a cache keyed on cwd alone would hand the second pane the first one's session,
+    reaching the exact privacy failure the matcher exists to prevent, by a route
+    that bypasses the matcher entirely."""
+    c, seen = history_client
+    c.get("/api/threads/2/history")
+    assert seen["pane_key"] == "%42"
 
 
 def test_history_reports_which_session_and_how_sure(history_client):

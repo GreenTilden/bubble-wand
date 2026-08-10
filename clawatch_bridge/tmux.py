@@ -423,6 +423,17 @@ def _current_indices() -> list[int]:
     return [row["index"] for row in _enumerate()]
 
 
+def pane_id(index: int) -> str | None:
+    """The tmux `%N` id of the pane at this ordinal, or None if it is gone.
+
+    The one identity that outlives a poll. Callers that cache anything per pane
+    key on THIS rather than on the index, which is recomputed every enumeration
+    and has already been observed to point at a different pane.
+    """
+    row = _pane_row(index)
+    return row["pane_id"] if row else None
+
+
 class PaneIdentityError(Exception):
     """The pane at this index is not the pane the caller was looking at.
 
