@@ -45,8 +45,13 @@ app = FastAPI(title="clawatch-bridge", version="0.1.0")
 @app.on_event("startup")
 async def _startup() -> None:
     logging.basicConfig(level=logging.INFO)
-    log.info("clawatch-bridge listening on %s:%s (tmux window %s)",
-             settings.host, settings.port, settings.tmux_window)
+    # The scope's SHAPE is spelled out, not left to be inferred from the string.
+    # "dev" and "dev:1" differ by one character and by every pane in the session,
+    # and the failure mode of reading it wrong is a thread list that looks
+    # plausible while addressing the wrong panes.
+    log.info("clawatch-bridge listening on %s:%s (tmux scope %s — %s)",
+             settings.host, settings.port, settings.tmux_scope,
+             "one window" if ":" in settings.tmux_scope else "whole session, every window")
     # COUNT, never the patterns themselves — a log line is a surface too, and the
     # patterns name what is being kept off a screen. Logged unconditionally
     # because "0 exclusion patterns" is the reading that matters: the filter fails
@@ -152,6 +157,11 @@ async def get_tail(
         captured = tmux.capture(
             index, lines=lines, scrollback=scrollback, ansi=ansi, history=history
         )
+        # Resolved, not formatted from config: under a session scope the window
+        # differs per pane, so `f"{scope}.{index}"` would report an address that
+        # does not exist -- and would do it in the field a client shows the
+        # operator to confirm WHICH pane they are reading.
+        address = tmux.pane_address(index)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except tmux.TmuxError as e:
@@ -162,7 +172,7 @@ async def get_tail(
     parsed = tmux.parse_prompt([tmux.strip_ansi(ln) for ln in captured])
     return TailResponse(
         index=index,
-        pane=f"{settings.tmux_window}.{index}",
+        pane=address,
         lines=captured,
         capturedAt=datetime.now(timezone.utc).isoformat(),
         prompt=PromptInfo(**parsed) if parsed else None,

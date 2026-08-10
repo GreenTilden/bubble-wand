@@ -15,11 +15,34 @@ class Settings:
         self.host: str = os.getenv("CLAWATCH_HOST", "0.0.0.0")
         self.port: int = int(os.getenv("CLAWATCH_PORT", "8793"))
 
-        # The tmux window whose panes ARE the threads. Panes are addressed as
-        # "<window>.<index>", e.g. dev:1.1 .. dev:1.N. The client only ever sends
-        # the integer index; the server constructs the target, so there is no
-        # user-controlled string in the tmux target argument.
-        self.tmux_window: str = os.getenv("CLAWATCH_TMUX_WINDOW", "dev:1")
+        # The tmux panes that ARE the threads. Two forms, told apart by the colon
+        # (tmux's own convention -- a session name cannot contain one):
+        #
+        #   dev:1   ONE WINDOW      every pane in that window
+        #   dev     WHOLE SESSION   every pane in every window
+        #
+        # The session form exists because a window's panes all share one width,
+        # and the narrowest client viewing that window sets it. Five Claude panes
+        # tiled in one window is therefore five threads whose print width is
+        # decided by whoever attached last -- a 53-column phone divides to ~10
+        # columns each, and Claude hard-wraps its output at that width
+        # PERMANENTLY (it emits real newlines; no later resize reflows them).
+        # One pane per window decouples them: tmux sizes each window from the
+        # clients actually viewing it, so the phone only narrows the one it is
+        # looking at.
+        #
+        # Default is the window form, unchanged, and CLAWATCH_TMUX_WINDOW is
+        # still read -- a deployed unit keeps its current behaviour byte for byte
+        # until someone edits the env on purpose.
+        #
+        # The client only ever sends an integer index; the server resolves it
+        # against its own enumeration of this scope, so no user-controlled string
+        # ever reaches a tmux target argument.
+        self.tmux_scope: str = (
+            os.getenv("CLAWATCH_TMUX_SCOPE")
+            or os.getenv("CLAWATCH_TMUX_WINDOW")
+            or "dev:1"
+        )
 
         # Panes whose title/label/repo/command contain any of these substrings are
         # not exposed to ANY client -- absent from the list, 404 when addressed.

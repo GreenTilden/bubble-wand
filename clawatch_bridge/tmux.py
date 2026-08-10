@@ -324,9 +324,103 @@ def _valid_index(index: int) -> bool:
     return isinstance(index, int) and 1 <= index <= 99
 
 
+def _scope_args() -> list[str]:
+    """`list-panes` targeting for the configured scope.
+
+    A scope containing a colon (`dev:1`) is ONE WINDOW; a bare name (`dev`) is
+    the whole session, which needs -s. tmux forbids a colon in a session name,
+    so the FORM of the setting is unambiguous and no extra config is needed to
+    say which one was meant.
+    """
+    scope = settings.tmux_scope
+    if ":" in scope:
+        return ["-t", scope]
+    return ["-s", "-t", scope]
+
+
+# One format for every enumeration, deliberately. The fields cost nothing extra
+# (list-panes reads them either way) and the alternative -- a per-caller format
+# string -- meant every reader had to re-derive which column was which, and a
+# test fixture had to sniff the format to know what to render.
+#
+# title LAST and split with maxsplit: a pane title is the one field here that
+# can plausibly contain a tab, and putting it last means a stray tab garbles
+# only the title instead of shifting every column after it.
+_PANE_FIELDS = (
+    "#{session_name}",
+    "#{window_index}",
+    "#{pane_index}",
+    "#{pane_id}",
+    "#{pane_current_command}",
+    "#{pane_current_path}",
+    "#{pane_title}",
+)
+_PANE_FORMAT = "\t".join(_PANE_FIELDS)
+
+
+def _enumerate() -> list[dict]:
+    """Every pane in scope, ordered, each carrying the index clients address it by.
+
+    THE INDEX IS AN ORDINAL OVER THIS LIST, not tmux's `pane_index`. Under a
+    one-window scope the two coincide, which is exactly why the distinction was
+    invisible until the scope could span windows: `pane_index` restarts at 1 in
+    every window, so five one-pane windows are five different panes all called
+    1. Enumerating on tmux's numbering would have collided them silently -- the
+    list would look right and every index would address the wrong pane.
+
+    The (window, pane) ordering is imposed HERE rather than trusted from
+    list-panes, so a client's ordinal does not depend on tmux's output order.
+
+    Like every index before it, this ordinal is POSITIONAL: closing a window
+    renumbers everything after it exactly as closing a pane always did. That
+    hazard is unchanged, not introduced, and `paneId` is still the answer to it
+    (see assert_pane_identity) -- which is why that guard was worth building
+    before this change rather than after.
+    """
+    out = _run(["list-panes", *_scope_args(), "-F", _PANE_FORMAT])
+    rows: list[dict] = []
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t", len(_PANE_FIELDS) - 1)
+        if len(parts) < 4:
+            continue
+        session, window, pane, pane_id = (p.strip() for p in parts[:4])
+        if not window.isdigit() or not pane.isdigit():
+            continue
+        rows.append(
+            {
+                "session_name": session,
+                "window_index": int(window),
+                "pane_index": int(pane),
+                "pane_id": pane_id,
+                "command": parts[4] if len(parts) > 4 else "",
+                "path": parts[5] if len(parts) > 5 else "",
+                "title": parts[6] if len(parts) > 6 else "",
+            }
+        )
+    rows.sort(key=lambda r: (r["window_index"], r["pane_index"]))
+    for ordinal, row in enumerate(rows, start=1):
+        row["index"] = ordinal
+    return rows
+
+
+def _row_target(row: dict) -> str:
+    """The tmux address of an enumerated pane. Built from tmux's OWN answer about
+    where the pane lives, never from the configured scope string -- under a
+    session scope the window differs per pane, so the scope no longer names it."""
+    return f"{row['session_name']}:{row['window_index']}.{row['pane_index']}"
+
+
+def _pane_row(index: int) -> dict | None:
+    for row in _enumerate():
+        if row["index"] == index:
+            return row
+    return None
+
+
 def _current_indices() -> list[int]:
-    out = _run(["list-panes", "-t", settings.tmux_window, "-F", "#{pane_index}"])
-    return [int(x) for x in out.split()]
+    return [row["index"] for row in _enumerate()]
 
 
 class PaneIdentityError(Exception):
@@ -341,21 +435,13 @@ class PaneIdentityError(Exception):
 
 
 def _pane_id_map() -> dict[int, str]:
-    """index -> pane_id (%N) for the configured window, as tmux sees it RIGHT NOW.
+    """index -> pane_id (%N) across the configured scope, as tmux sees it RIGHT NOW.
 
     Cheap on purpose: one list-panes, no captures. `list_threads` computes the
     same mapping but pays a capture per pane, which is far too much to spend on
     a per-request identity check.
     """
-    out = _run([
-        "list-panes", "-t", settings.tmux_window, "-F", "#{pane_index}\t#{pane_id}",
-    ])
-    m: dict[int, str] = {}
-    for line in out.splitlines():
-        parts = line.split("\t")
-        if len(parts) >= 2 and parts[0].strip().isdigit():
-            m[int(parts[0])] = parts[1].strip()
-    return m
+    return {row["index"]: row["pane_id"] for row in _enumerate()}
 
 
 def _missing_pane_msg(index: int) -> str:
@@ -365,7 +451,7 @@ def _missing_pane_msg(index: int) -> str:
     separate message for exclusion would confirm the pane exists, which is the
     fact being withheld. One function so they cannot drift apart later.
     """
-    return f"pane index {index} does not exist in {settings.tmux_window}"
+    return f"pane index {index} does not exist in {settings.tmux_scope}"
 
 
 def assert_pane_allowed(index: int) -> None:
@@ -385,28 +471,25 @@ def assert_pane_allowed(index: int) -> None:
     """
     if not settings.excluded_pane_patterns:
         return
-    out = _run([
-        "list-panes", "-t", settings.tmux_window, "-F",
-        "#{pane_index}\t#{pane_current_command}\t#{pane_title}\t#{pane_current_path}",
-    ])
-    for line in out.splitlines():
-        parts = line.split("\t")
-        if len(parts) < 3 or not parts[0].strip().isdigit() or int(parts[0]) != index:
-            continue
-        command, title = parts[1], parts[2]
-        cwd = parts[3] if len(parts) > 3 else ""
-        _, _, label = _derive_status(title)
-        if pane_filter.is_excluded(
-            {
-                "title": title,
-                "label": label,
-                "repo": os.path.basename(cwd.rstrip("/")) if cwd else None,
-                "command": command,
-            },
-            settings.excluded_pane_patterns,
-        ):
-            raise ValueError(_missing_pane_msg(index))
+    row = _pane_row(index)
+    if row is None:
+        # Not this function's job to report. The ordinary missing-pane path in
+        # _pane_target raises the same message a moment later, and raising here
+        # too would mean an absent index took the EXCLUDED branch -- the one
+        # asymmetry this pair exists to avoid.
         return
+    title, cwd = row["title"], row["path"]
+    _, _, label = _derive_status(title)
+    if pane_filter.is_excluded(
+        {
+            "title": title,
+            "label": label,
+            "repo": os.path.basename(cwd.rstrip("/")) if cwd else None,
+            "command": row["command"],
+        },
+        settings.excluded_pane_patterns,
+    ):
+        raise ValueError(_missing_pane_msg(index))
 
 
 def assert_pane_identity(index: int, expected_pane_id: str | None) -> None:
@@ -418,10 +501,15 @@ def assert_pane_identity(index: int, expected_pane_id: str | None) -> None:
     holding index 3 silently reads -- and TYPES INTO -- a different session.
     Proven empirically, not inferred (della cycle-66 L17).
 
+    Under a session-wide scope the same hazard has a second source: the ordinal
+    is assigned across windows, so closing a WINDOW renumbers every pane after
+    it, not just its neighbours. Same guard, wider blast radius -- which is the
+    argument for having built this before widening the scope, not after.
+
     `expected_pane_id` is an ASSERTION, never a target. This function only ever
     compares; nothing downstream builds a tmux target from a client-supplied
     string, so the structural control that this bridge touches only
-    `settings.tmux_window` is preserved by construction. A pane id belonging to
+    `settings.tmux_scope` is preserved by construction. A pane id belonging to
     some other session simply is not in the map, and mismatches like any other.
 
     No-op when `expected_pane_id` is None -- the watch does not send one and its
@@ -439,12 +527,29 @@ def assert_pane_identity(index: int, expected_pane_id: str | None) -> None:
 
 
 def _pane_target(index: int) -> str:
-    """Build and validate a pane target. Raises ValueError on a bad/absent index."""
+    """Build and validate a pane target. Raises ValueError on a bad/absent index.
+
+    Still positional (`session:window.pane`) and still built entirely server
+    side -- a pane id never appears in a target, so the L17 property holds
+    verbatim. What changed is where the window comes from: it used to be the
+    configured scope string, which only worked while the scope WAS one window.
+    """
     if not _valid_index(index):
         raise ValueError(f"invalid pane index: {index!r}")
-    if index not in _current_indices():
+    row = _pane_row(index)
+    if row is None:
         raise ValueError(_missing_pane_msg(index))
-    return f"{settings.tmux_window}.{index}"
+    return _row_target(row)
+
+
+def pane_address(index: int) -> str:
+    """The tmux address a client index currently resolves to, for display.
+
+    Exists because the address is no longer derivable from config: callers used
+    to format `f"{tmux_window}.{index}"` themselves, which is silently wrong the
+    moment the scope spans more than one window.
+    """
+    return _pane_target(index)
 
 
 def parse_status(lines: list[str]) -> dict | None:
@@ -497,30 +602,19 @@ def parse_status(lines: list[str]) -> dict | None:
 
 
 def list_threads() -> list[dict]:
-    out = _run(
-        [
-            "list-panes",
-            "-t",
-            settings.tmux_window,
-            "-F",
-            "#{pane_index}\t#{pane_current_command}\t#{pane_title}\t#{pane_id}\t#{pane_current_path}",
-        ]
-    )
     threads: list[dict] = []
-    for line in out.splitlines():
-        if not line.strip():
-            continue
-        parts = line.split("\t")
-        idx = int(parts[0])
-        command = parts[1] if len(parts) > 1 else ""
-        title = parts[2] if len(parts) > 2 else ""
+    for row in _enumerate():
+        idx = row["index"]
+        command = row["command"]
+        title = row["title"]
         # pane_id (%N) is stable for the pane's whole life and never reused while the tmux
-        # server lives — which is exactly the lifetime a wash spans. pane_index is NOT an
+        # server lives — which is exactly the lifetime a wash spans. The index is NOT an
         # identity: it is recomputed every poll and panes have already been destroyed and
         # recreated, so indices and ids diverge. Anything that outlives one poll keys on
         # pane_id. cwd is carried only as a repo BASENAME downstream, never a full path.
-        pane_id = parts[3] if len(parts) > 3 else ""
-        cwd = parts[4] if len(parts) > 4 else ""
+        pane_id = row["pane_id"]
+        cwd = row["path"]
+        target = _row_target(row)
         glyph, status, label = _derive_status(title)
         repo = os.path.basename(cwd.rstrip("/")) if cwd else None
         # Excluded panes are dropped HERE, before _do_capture, not filtered out of
@@ -547,7 +641,7 @@ def list_threads() -> list[dict]:
             # check stops running with nothing anywhere reporting that it stopped.
             # _do_capture pops trailing blanks BEFORE slicing, so raw[-25:] is byte-identical
             # to what the prompt path received before. No extra tmux call.
-            raw = _do_capture(f"{settings.tmux_window}.{idx}", 0, False, False)
+            raw = _do_capture(target, 0, False, False)
             meter = parse_status(raw)
             if parse_prompt(_clean_tail(raw[-25:])):
                 has_prompt = True
@@ -557,7 +651,7 @@ def list_threads() -> list[dict]:
         threads.append(
             {
                 "index": idx,
-                "pane": f"{settings.tmux_window}.{idx}",
+                "pane": target,
                 "command": command,
                 "status": status,
                 "glyph": glyph,

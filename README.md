@@ -89,9 +89,46 @@ tmux split-window -v             # pane 3, etc.
 ```
 
 Point the bridge at wherever your Claude Code panes actually live by setting
-`CLAWATCH_TMUX_WINDOW` (e.g. `work:2`). The bridge derives each thread's status —
+`CLAWATCH_TMUX_SCOPE` (e.g. `work:2`). The bridge derives each thread's status —
 **working**, **needs input**, or **idle** — from the pane, and surfaces the ones needing
 you first.
+
+### One window, or the whole session
+
+`CLAWATCH_TMUX_SCOPE` takes two forms, told apart by the colon:
+
+| Value | Means |
+|---|---|
+| `dev:1` | **One window** — every pane in it. The default. |
+| `dev` | **The whole session** — every pane in every window. |
+
+The session form exists for a specific reason. **Every pane in a tmux window shares one
+width, and the window is sized by the clients viewing it.** Tile five Claude sessions as
+panes in one window and their print width is set by whoever attached last — a 53-column
+phone divides to about 10 columns each.
+
+That width is not recoverable afterwards. Claude Code hard-wraps its own output with real
+newlines at whatever width it had when it printed, so no later resize, no
+`capture-pane -J`, and no zoom-on-read will reflow it. Whatever width the pane had at
+print time is the width every downstream client is stuck with, forever.
+
+One pane per **window** decouples them: tmux sizes each window independently from the
+clients actually viewing it, so a phone attaching only narrows the window it is looking
+at. Set the scope to the bare session name and the bridge lists every window as a thread.
+
+```bash
+tmux new-session -s dev          # window 1
+tmux new-window -t dev           # window 2 ... one `claude` per window
+```
+
+```
+CLAWATCH_TMUX_SCOPE=dev
+```
+
+Thread indices become an **ordinal over the whole scope**, not tmux's `pane_index` —
+`pane_index` restarts at 1 in every window, so five one-pane windows are five different
+panes all called `1`. Like any positional index it shifts when the layout changes, which
+is what the `paneId` assertion on every route is for.
 
 ---
 
@@ -104,7 +141,7 @@ are added by `/setup`, not by hand.
 |----------|---------|--------------|
 | `CLAWATCH_HOST` | `0.0.0.0` | Bind address. `0.0.0.0` lets any device on your LAN reach it; set a specific LAN IP to restrict it. |
 | `CLAWATCH_PORT` | `8793` | Port to listen on. |
-| `CLAWATCH_TMUX_WINDOW` | `dev:1` | The tmux window whose panes are your Claude Code threads. |
+| `CLAWATCH_TMUX_SCOPE` | `dev:1` | The panes that are your Claude Code threads. `dev:1` = one window; `dev` = every window in the session. Falls back to `CLAWATCH_TMUX_WINDOW`, the former name, if that is what your `clawatch.env` already sets. |
 | `ANTHROPIC_API_KEY` | *(unset)* | **Your** key. Written by `/setup`. Powers voice-suggestion features; when unset those simply return empty. |
 | `CLAWATCH_TOKEN` | *(minted)* | Bearer token required on every `/api` call. Minted by `/setup`; pin it yourself to keep it stable. |
 | `CLAWATCH_TAIL_LINES` | `40` | Default number of recent lines returned per thread. |

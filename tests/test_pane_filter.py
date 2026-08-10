@@ -26,17 +26,16 @@ PANES = {
 
 
 def _list_panes_output(fmt: str) -> str:
-    """Render the two -F formats tmux.py asks for, from one fixture."""
+    """Render tmux.py's ONE -F format from the fixture above.
+
+    Used to render three different formats and sniff `fmt` to tell which was
+    asked for. There is only one now (tmux._PANE_FORMAT), so this renders it
+    positionally and a field reorder breaks the test instead of silently
+    producing plausible-but-shifted rows.
+    """
     rows = []
     for idx, (command, title, cwd) in sorted(PANES.items()):
-        if "pane_id" in fmt and "pane_current_command" not in fmt:
-            rows.append(f"{idx}\t%4{idx}")
-        elif "pane_current_command" in fmt and "pane_id" in fmt:
-            rows.append(f"{idx}\t{command}\t{title}\t%4{idx}\t{cwd}")
-        elif "pane_current_command" in fmt:
-            rows.append(f"{idx}\t{command}\t{title}\t{cwd}")
-        else:
-            rows.append(str(idx))
+        rows.append("\t".join(["dev", "1", str(idx), f"%4{idx}", command, cwd, title]))
     return "\n".join(rows)
 
 

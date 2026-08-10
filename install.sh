@@ -7,7 +7,8 @@
 # your key there — it is written locally and never leaves this box.
 #
 # Overrides (env vars):
-#   CLAWATCH_PORT (8793)  CLAWATCH_HOST (0.0.0.0)  CLAWATCH_TMUX_WINDOW (dev:1)
+#   CLAWATCH_PORT (8793)  CLAWATCH_HOST (0.0.0.0)  CLAWATCH_TMUX_SCOPE (dev:1)
+#     — 'dev:1' is one window; a bare 'dev' is every window in the session
 #   CLAWATCH_PREFIX (~/clawatch-bridge)  CLAWATCH_SERVICE (clawatch-bridge)
 #   CLAWATCH_NO_SERVICE (set to skip systemd and just print the run command)
 set -euo pipefail
@@ -15,7 +16,9 @@ set -euo pipefail
 PREFIX="${CLAWATCH_PREFIX:-$HOME/clawatch-bridge}"
 PORT="${CLAWATCH_PORT:-8793}"
 HOST="${CLAWATCH_HOST:-0.0.0.0}"
-WINDOW="${CLAWATCH_TMUX_WINDOW:-dev:1}"
+# One window (dev:1) or a whole session (dev). CLAWATCH_TMUX_WINDOW is the
+# former name and is still honoured so an existing install script keeps working.
+SCOPE="${CLAWATCH_TMUX_SCOPE:-${CLAWATCH_TMUX_WINDOW:-dev:1}}"
 SERVICE="${CLAWATCH_SERVICE:-clawatch-bridge}"
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$PREFIX/clawatch.env"
@@ -55,7 +58,7 @@ if [ ! -f "$ENV_FILE" ]; then
 # are written here by the /setup page — do not paste them by hand.
 CLAWATCH_HOST=$HOST
 CLAWATCH_PORT=$PORT
-CLAWATCH_TMUX_WINDOW=$WINDOW
+CLAWATCH_TMUX_SCOPE=$SCOPE
 CLAWATCH_ENV_FILE=$ENV_FILE
 EOF
   )

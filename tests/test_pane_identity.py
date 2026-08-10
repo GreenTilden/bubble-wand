@@ -74,10 +74,18 @@ def test_identity_error_is_not_a_valueerror():
 
 def test_a_pane_id_is_never_used_as_a_target(monkeypatch):
     """The security property, asserted rather than trusted to review: whatever a
-    client sends, the tmux target still comes from the configured window."""
-    monkeypatch.setattr(tmux, "_current_indices", lambda: [1, 2, 3])
+    client sends, the tmux target is built from the server's own enumeration.
+
+    Still positional after the scope widened to whole sessions -- the window now
+    comes from tmux's answer for that pane rather than from the scope string,
+    which is a different SOURCE for the same shape, not a retarget-by-id."""
+    monkeypatch.setattr(tmux, "_enumerate", lambda: [
+        {"index": i, "session_name": "dev", "window_index": 1, "pane_index": i,
+         "pane_id": pid, "command": "node", "path": "", "title": ""}
+        for i, pid in PANES.items()
+    ])
     target = tmux._pane_target(3)
-    assert target == f"{settings.tmux_window}.3"
+    assert target == "dev:1.3"
     assert "%" not in target
 
 
