@@ -153,6 +153,20 @@ class UnattributedUsage(BaseModel):
     estimated_cost_usd: float = 0.0
 
 
+class LocalRuns(BaseModel):
+    """The suggestions that DIDN'T cost cloud money. Counts and latency only,
+    by contract: there is no token or dollar figure to attach to a local run,
+    and this model must never grow a spend field — the basis string travels
+    with the counts so nobody re-prices them downstream. fallback_calls pairs
+    1:1 with spend-meter increments (cloud served after a local miss)."""
+    served_calls: int = 0
+    fallback_calls: int = 0
+    latency_ms_total: int = 0
+    avg_latency_ms: float | None = None
+    since: str | None = None  # first local-served call; runs before it are uncounted, not zero
+    basis: str = ""
+
+
 class UsageResponse(BaseModel):
     calls: int = 0
     input_tokens: int = 0
@@ -169,6 +183,8 @@ class UsageResponse(BaseModel):
     # would serve a shape the unit tests never see because they test the function.
     by_model: dict[str, ModelUsage] = {}
     unattributed: UnattributedUsage = Field(default_factory=UnattributedUsage)
+    # The local-run section. Declared for the same reason as every field above it.
+    local: LocalRuns = Field(default_factory=LocalRuns)
 
 
 class DigestResponse(BaseModel):

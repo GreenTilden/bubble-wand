@@ -104,10 +104,50 @@ def test_api_usage_exposes_every_field_get_usage_returns(state):
     assert served == returned
 
 
+def test_local_run_counts_survive_a_restart(state):
+    """The T2 gate: a service bounce must not zero the local-run story. Same
+    durability contract as the spend counters, same restart simulation."""
+    suggest._record_local("served_calls", 1234.0)
+    suggest._record_local("served_calls", 766.0)
+    suggest._record_local("fallback_calls")
+
+    suggest._usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "since": None,
+                      "by_model": {}}
+    suggest._load_usage()
+
+    loc = suggest.get_usage()["local"]
+    assert (loc["served_calls"], loc["fallback_calls"]) == (2, 1)
+    assert loc["latency_ms_total"] == 2000
+    assert loc["avg_latency_ms"] == 1000
+    assert loc["since"], "local runs are cumulative too — no start date, no meaning"
+
+
+def test_pre_local_state_file_starts_local_at_zero(state):
+    """A state file from before local metering restores spend intact and local
+    at defaults — the weeks of unmetered local runs are uncounted, not invented."""
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text(json.dumps(
+        {"calls": 5, "input_tokens": 100, "output_tokens": 20,
+         "since": "2026-07-01T00:00:00+00:00", "by_model": {}}))
+    suggest._load_usage()
+    u = suggest.get_usage()
+    assert u["calls"] == 5
+    assert u["local"]["served_calls"] == 0 and u["local"]["since"] is None
+
+
 def test_state_holds_totals_only_never_content(state):
     suggest._record_usage(FakeUsage(1, 1))
+    suggest._record_local("served_calls", 42.0)
     saved = json.loads(state.read_text())
-    assert set(saved) == {"calls", "input_tokens", "output_tokens", "since", "by_model"}
+    assert set(saved) == {"calls", "input_tokens", "output_tokens", "since", "by_model",
+                          "local"}
+    # The local section is the newest structure with room to hide anything; pin it
+    # to counts + latency + a stamp, same as the guard reaches inside by_model. A
+    # spend field appearing here would be the exact contract violation T2 forbids.
+    loc = saved["local"]
+    assert set(loc) == {"served_calls", "fallback_calls", "latency_ms_total", "since"}
+    assert all(isinstance(loc[k], int)
+               for k in ("served_calls", "fallback_calls", "latency_ms_total"))
     # by_model is the one nested structure in the file, so it is the one place a
     # future change could smuggle something that is not a count. Model name -> three
     # integers, nothing else: the guard has to reach INSIDE it or it stops guarding

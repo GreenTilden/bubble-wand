@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import threading
+import time
 from datetime import datetime, timezone
 
 from .config import settings
@@ -30,6 +31,16 @@ _usage_lock = threading.Lock()
 # than one tier is in play; the flat totals stay for the API shape and for state files
 # written before the split existed.
 _usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "since": None, "by_model": {}}
+
+
+def _local_defaults() -> dict:
+    """The local-run section of the meter. COUNTS AND LATENCY ONLY, by contract:
+    a local call has no token or dollar cost to attribute, and this section must
+    never grow a spend field — the spend meter above is the record of cloud cost,
+    and a local run is the absence of exactly that. `served_calls` = the local
+    backend answered; `fallback_calls` = local produced nothing and the CLOUD
+    answered instead (so it pairs 1:1 with a spend-meter increment)."""
+    return {"served_calls": 0, "fallback_calls": 0, "latency_ms_total": 0, "since": None}
 
 
 def _load_usage() -> None:
@@ -52,6 +63,16 @@ def _load_usage() -> None:
                     for m, v in by_model.items()
                     if isinstance(v, dict)
                 }
+            # A state file written before local-run metering has no "local"; those
+            # runs are simply uncounted (the co-pilot ran local for weeks before the
+            # meter existed — asserting a history would be fabrication, not restore).
+            local = saved.get("local")
+            if isinstance(local, dict):
+                restored = _local_defaults()
+                for k in ("served_calls", "fallback_calls", "latency_ms_total"):
+                    restored[k] = int(local.get(k) or 0)
+                restored["since"] = local.get("since") or None
+                _usage["local"] = restored
     except FileNotFoundError:
         pass
     except Exception as e:  # noqa: BLE001 -- a bad state file must not stop the bridge
@@ -230,10 +251,21 @@ def generate_suggestions(cleaned: list[str], prompt: dict | None) -> list[str]:
     else:
         ctx = f"Recent terminal from the coding agent:\n{tail_text}"
 
+    local_missed = False
     if settings.suggest_backend == "ollama":
+        t0 = time.monotonic()
         out = _ollama_suggestions(ctx)
         if out:
+            try:
+                _record_local("served_calls", (time.monotonic() - t0) * 1000)
+            except Exception:  # noqa: BLE001 -- accounting must never break suggest
+                pass
             return out
+        # Not counted as a fallback yet: that name is reserved for "the cloud
+        # answered instead", stamped below only when it actually does. A local
+        # miss with no cloud client (or a cloud failure) is counted nowhere,
+        # same as it always was.
+        local_missed = True
         log.info("suggest: local backend produced nothing — falling back to cloud")
 
     client = _get_client()
@@ -253,6 +285,8 @@ def generate_suggestions(cleaned: list[str], prompt: dict | None) -> list[str]:
 
     try:
         _record_usage(msg.usage)
+        if local_missed:
+            _record_local("fallback_calls")
     except Exception:  # noqa: BLE001 -- usage accounting must never break suggest
         pass
 
@@ -274,6 +308,22 @@ def _parse(text: str) -> list[str]:
             if t:
                 out.append(t)
     return [s[:100] for s in out][:3]  # cap length + count (2-3)
+
+
+def _record_local(kind: str, latency_ms: float | None = None) -> None:
+    """Count a local-backend outcome. Same contract as _record_usage: durable,
+    totals-only, and never allowed to break a suggestion (callers wrap it).
+    setdefault tolerates an in-memory dict from before this section existed."""
+    with _usage_lock:
+        loc = _usage.setdefault("local", _local_defaults())
+        loc[kind] += 1
+        if latency_ms is not None:
+            loc["latency_ms_total"] += int(round(latency_ms))
+        if not loc["since"]:
+            # Same rule as the spend meter's since: stamped once, ever. Runs
+            # before this stamp existed are uncounted, not zero.
+            loc["since"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        _save_usage_locked()
 
 
 def _record_usage(usage, model: str | None = None) -> None:
@@ -306,6 +356,7 @@ def get_usage() -> dict:
         ot = _usage["output_tokens"]
         since = _usage["since"]
         by_model = {m: dict(v) for m, v in _usage["by_model"].items()}
+        loc = dict(_usage.get("local") or _local_defaults())
 
     fallback = (settings.suggest_price_in, settings.suggest_price_out)
     cost = 0.0
@@ -355,6 +406,22 @@ def get_usage() -> dict:
             "input_tokens": rest_in,
             "output_tokens": rest_out,
             "estimated_cost_usd": round(rest_cost, 4),
+        },
+        # The runs that DIDN'T cost cloud money. Counts + latency only, by
+        # contract (_local_defaults) — the whole point of this section is that
+        # there is no spend to report, and the basis line travels with the
+        # numbers so nobody prices them downstream. fallback_calls pairs 1:1
+        # with spend-meter increments: it is how many suggestions the cloud
+        # still served after a local miss, i.e. the honest denominator for
+        # "how local is the co-pilot really".
+        "local": {
+            "served_calls": loc["served_calls"],
+            "fallback_calls": loc["fallback_calls"],
+            "latency_ms_total": loc["latency_ms_total"],
+            "avg_latency_ms": (round(loc["latency_ms_total"] / loc["served_calls"])
+                               if loc["served_calls"] else None),
+            "since": loc["since"],
+            "basis": "counts and latency only — a local run has no token or dollar cost to meter",
         },
     }
 
