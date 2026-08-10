@@ -152,11 +152,29 @@ async def get_tail(
     # since L15; this route did not expose it, so a client asking for it got the
     # screen and no way to tell. Off by default: the watch's poll is unchanged.
     history: bool = Query(default=False),
+    # Paging. `before` rows above the newest row is where the returned window
+    # ENDS, so before=0 is the live tail and before=150 is the screen before it.
+    # Capped well above any plausible read-back so a client bug cannot ask tmux
+    # for a million-row capture, and NOT bounded by `lines`' 500: the whole point
+    # is that depth is reached by walking, not by one enormous request.
+    before: int = Query(default=0, ge=0, le=20000),
 ) -> TailResponse:
     try:
-        captured = tmux.capture(
-            index, lines=lines, scrollback=scrollback, ansi=ansi, history=history
-        )
+        if before:
+            # Deliberately its own branch rather than folding `before` into
+            # capture(): before=0 must stay byte-identical to what every client
+            # polls today, including the watch, which does not know this
+            # parameter exists. A paging bug can then only ever break paging.
+            captured, has_older = tmux.capture_page(
+                index, lines=lines, before=before, ansi=ansi
+            )
+        else:
+            captured = tmux.capture(
+                index, lines=lines, scrollback=scrollback, ansi=ansi, history=history
+            )
+            # Only meaningful for a client that asked to be positioned at all.
+            # A live-tail poll gets False and ignores it.
+            has_older = False
         # Resolved, not formatted from config: under a session scope the window
         # differs per pane, so `f"{scope}.{index}"` would report an address that
         # does not exist -- and would do it in the field a client shows the
@@ -176,6 +194,8 @@ async def get_tail(
         lines=captured,
         capturedAt=datetime.now(timezone.utc).isoformat(),
         prompt=PromptInfo(**parsed) if parsed else None,
+        before=before,
+        hasOlder=has_older,
     )
 
 

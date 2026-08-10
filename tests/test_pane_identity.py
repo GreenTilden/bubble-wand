@@ -34,8 +34,18 @@ PANES = {1: "%45", 2: "%46", 3: "%47"}
 def client(monkeypatch):
     monkeypatch.setattr(tmux, "_pane_id_map", lambda: dict(PANES))
     monkeypatch.setattr(tmux, "capture", lambda *a, **k: ["a line"])
+    monkeypatch.setattr(tmux, "capture_page", lambda *a, **k: (["a line"], False))
     monkeypatch.setattr(tmux, "send", lambda *a, **k: None)
     monkeypatch.setattr(tmux, "send_key", lambda *a, **k: None)
+    # pane_address reaches LIVE tmux, and this fixture did not fake it -- so these
+    # tests silently depended on the developer's own tmux session having an index 3
+    # under the configured scope. It did, until the panes-to-windows split (L21)
+    # left dev:1 holding one pane: two tests about the identity GATE began failing
+    # with 404 for a reason that has nothing to do with identity, in a file whose
+    # fixture fakes everything else the route touches. The tail route grew this call
+    # in the same commit that widened the scope, which is why "140 green" was true
+    # when L21 measured it and false an hour later, with no code change in between.
+    monkeypatch.setattr(tmux, "pane_address", lambda index: f"dev:1.{index}")
     c = TestClient(main.app, raise_server_exceptions=False)
     c.headers.update({"Authorization": f"Bearer {settings.token}"})
     return c

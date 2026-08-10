@@ -81,3 +81,66 @@ def test_every_capture_knob_is_reachable_over_http():
     assert not missing, (
         f"tmux.capture takes {sorted(missing)} but /api/threads/{{index}}/tail "
         f"does not accept them — a client asking for them gets 200 and silence")
+
+
+# --- paging (L22) ---------------------------------------------------------
+#
+# Same boundary, checked before shipping this time rather than after: the paging
+# maths is unit-tested in test_tail_paging.py, and NONE of that would catch the
+# route forgetting to declare `before`. The failure would look identical to the
+# L15 one -- 200 OK, and every "older" tap returning the live tail.
+
+
+@pytest.fixture
+def paging_client(monkeypatch):
+    """Fakes BOTH capture paths so a test can assert which one the route chose."""
+    seen = {}
+
+    def fake_capture(index, lines, scrollback, clean=True, ansi=False, history=False):
+        seen.update(path="capture", index=index, lines=lines, history=history)
+        return ["live tail line"]
+
+    def fake_capture_page(index, lines, before, ansi=False):
+        seen.update(path="capture_page", index=index, lines=lines,
+                    before=before, ansi=ansi)
+        return (["older line"], True)
+
+    monkeypatch.setattr(tmux, "capture", fake_capture)
+    monkeypatch.setattr(tmux, "capture_page", fake_capture_page)
+    c = TestClient(main.app)
+    c.headers.update({"Authorization": f"Bearer {settings.token}"})
+    return c, seen
+
+
+def test_before_reaches_tmux_as_a_page_request(paging_client):
+    c, seen = paging_client
+    r = c.get("/api/threads/1/tail?lines=150&before=300&ansi=true")
+    assert r.status_code == 200
+    assert seen["path"] == "capture_page"
+    assert seen["before"] == 300
+    assert seen["lines"] == 150
+
+
+def test_has_older_and_before_are_in_the_response_body(paging_client):
+    """pydantic drops undeclared response keys silently (L14.1). A client whose
+    'older' button never disables is the visible symptom of that, and it looks
+    like a UI bug rather than a schema one."""
+    c, _ = paging_client
+    body = c.get("/api/threads/1/tail?lines=150&before=300").json()
+    assert body["hasOlder"] is True
+    assert body["before"] == 300
+
+
+def test_before_zero_takes_the_untouched_live_path(paging_client):
+    """The watch and the 4s poll both send no `before`. They must not be routed
+    through the paging branch at all -- a paging bug can then only break paging."""
+    c, seen = paging_client
+    body = c.get("/api/threads/1/tail?lines=40").json()
+    assert seen["path"] == "capture"
+    assert body["before"] == 0
+    assert body["hasOlder"] is False
+
+
+def test_negative_before_is_a_422_not_a_silent_zero(paging_client):
+    c, _ = paging_client
+    assert c.get("/api/threads/1/tail?lines=150&before=-1").status_code == 422

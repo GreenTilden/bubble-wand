@@ -737,6 +737,77 @@ def capture(
     return _do_capture(target, lines, scrollback, clean, ansi, history)
 
 
+# Growth budget for capture_page. Each try doubles the raw request, so 4 tries
+# covers a 16x cleaning ratio -- far past anything observed (the worst live pane
+# measured ~1.1x). Bounded because this runs on an operator tap and a runaway
+# loop would hang the request rather than fail it.
+_PAGE_GROWTH_TRIES = 4
+_PAGE_MAX_RAW_ROWS = 40000
+
+
+def capture_page(
+    index: int,
+    lines: int,
+    before: int,
+    ansi: bool = False,
+) -> tuple[list[str], bool]:
+    """A `lines`-tall window ending `before` rows above the newest row.
+
+    This is what `history` is not. `history=True` gives a DEEPER tail -- always
+    anchored to the bottom, and capped at 500 by the route -- which answers "show
+    me more of the end". Paging answers "show me what came before that", and the
+    two compose: page N is the same size as page 0, so walking back ten screens
+    costs ten identical requests instead of one 5000-line one the phone has to
+    re-download every four seconds.
+
+    Anchored to the newest ROW rather than to the visible pane, because the
+    visible pane is not a stable ruler: it is the pane HEIGHT, which changes when
+    a window is resized -- and after the panes-to-windows split (L21) every pane's
+    height changed at once. Page boundaries computed against it would have shifted
+    under the operator mid-read. Trailing blanks are dropped before any of this,
+    inside _do_capture, so "the newest row" means the last row with content.
+
+    Returns (rows, has_older). `has_older` is decided by capturing ONE row beyond
+    the window and seeing whether it exists, then discarding it -- the client
+    cannot infer it from a short page, because a short page and the top of the
+    buffer look identical from the outside. No extra tmux call: the sentinel row
+    rides along in the same capture.
+    """
+    if before < 0:
+        raise ValueError("before must be >= 0")
+    target = _pane_target(index)
+    # Page in CLEANED row space, which is the space the client counts in.
+    #
+    # The first version paged in raw capture rows and was wrong on the live pane
+    # within a minute: _clean_tail drops chrome and collapses blank runs, so a
+    # 61-row raw capture became 57 cleaned rows, and asking to skip 40 left 17 --
+    # a window under-filled by 3 with has_older reading False on a buffer that
+    # visibly continued. The shrink is content-dependent and unbounded, so no
+    # fixed margin fixes it: a pane full of box-drawing loses far more rows than
+    # one full of prose, and the same pane changes ratio as it scrolls.
+    #
+    # So: ask, clean, and if that did not yield enough rows, ask deeper. tmux
+    # clamps `-S` at the start of the buffer, so a request that returns no more
+    # RAW rows than the last one means the buffer is exhausted -- which is the
+    # only honest way to distinguish "the top" from "we did not ask for enough".
+    want = lines + before + 1  # +1 is the sentinel that answers has_older
+    n = want
+    cleaned: list[str] = []
+    prev_raw = -1
+    for _ in range(_PAGE_GROWTH_TRIES):
+        raw = _do_capture(target, n, False, False, ansi, True)
+        cleaned = _clean_tail(raw)
+        if len(cleaned) >= want or len(raw) <= prev_raw:
+            break  # satisfied, or tmux has no more to give
+        prev_raw = len(raw)
+        n = min(n * 2, _PAGE_MAX_RAW_ROWS)
+    if before:
+        # Everything above this point is older than the window asked for.
+        cleaned = cleaned[:-before] if before < len(cleaned) else []
+    has_older = len(cleaned) > lines
+    return cleaned[-lines:], has_older
+
+
 # Fixed allowlist of control keys the watch may send. The client sends only the
 # action name; the actual tmux key string is chosen here, so no user-controlled
 # string ever reaches send-keys as a key name.

@@ -66,6 +66,16 @@ class TailResponse(BaseModel):
     lines: list[str]
     capturedAt: str
     prompt: PromptInfo | None = None
+    # Paging fields. `before` echoes the request so a client that fired two pages
+    # concurrently can tell which one landed -- the tail poll and an older-page
+    # pull are both in flight on a phone more often than not.
+    before: int = 0
+    # Whether anything exists ABOVE the returned window. This is the only honest
+    # way for a client to disable its "older" control: a short page means "the
+    # buffer ended" only if you already know how deep the buffer went, and the
+    # client does not. Computed from a row captured beyond the window and then
+    # discarded, so it costs no extra tmux call.
+    hasOlder: bool = False
 
 
 class SendRequest(BaseModel):
