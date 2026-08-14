@@ -10,6 +10,13 @@ mechanism ships and the patterns stay in the deployed unit. Which means the
 inertness test below is not a formality: an unset env var here fails OPEN and
 silently, so "the code is present" is not evidence the filter is running. The
 live probe against the deployed service is what proves it.
+
+The same reasoning governs the FIXTURES. Keeping the patterns out of the config
+and then writing the real ones into the test data publishes them just as well —
+a filter's example is a statement about what is worth hiding. So every name
+below is synthetic ("secret-project", "SECRET design review"). If you reach for
+a real repo or pane title here to make a case concrete, you have re-opened the
+leak this module exists to close.
 """
 import pytest
 from fastapi.testclient import TestClient
