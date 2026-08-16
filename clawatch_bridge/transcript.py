@@ -121,6 +121,76 @@ def _blocks(message) -> list[dict]:
     return []
 
 
+# Input keys worth showing, most specific first. `description` outranks `prompt`
+# because the tools carrying both (Agent, TaskCreate) put a human sentence in one
+# and a page of instructions in the other; the rest were read off the tools that
+# were rendering as a bare name -- Skill, ScheduleWakeup, PushNotification,
+# SendMessage, and the MCP calls, none of which use the original seven keys.
+_DETAIL_KEYS = (
+    "command", "file_path", "pattern", "path", "url",
+    "description", "prompt", "query",
+    "skill", "name", "reason", "message", "summary", "subject", "recipient",
+)
+
+# 110 was the old head-only budget and is kept, so a screen holds the same number
+# of lines; the split is where the change is.
+_DETAIL_MAX = 110
+_DETAIL_HEAD = 70
+_DETAIL_TAIL = 34
+_ELLIPSIS = " … "
+
+
+def _elide(detail: str) -> str:
+    """Truncate from the MIDDLE, keeping both ends.
+
+    Head-only truncation threw away the one part that told these lines apart. A
+    run of `ssh -o ConnectTimeout=25 root@somehost '…'` calls is identical for its
+    first 40 characters, so a screen of them read as one repeated line; a
+    file_path lost its basename to the repo prefix it shares with everything else
+    on screen. Both ends together are what make a line identifiable.
+    """
+    if len(detail) <= _DETAIL_MAX:
+        return detail
+    return f"{detail[:_DETAIL_HEAD]}{_ELLIPSIS}{detail[-_DETAIL_TAIL:]}"
+
+
+def _questions_detail(inp: dict) -> str:
+    """AskUserQuestion keeps its text one level down, in a list of dicts.
+
+    Only the first question: the line is a "what happened here" marker, and the
+    options belong on the pane itself, where the operator can actually answer.
+    """
+    qs = inp.get("questions")
+    if not isinstance(qs, list):
+        return ""
+    for q in qs:
+        if isinstance(q, dict):
+            for key in ("question", "header"):
+                val = q.get(key)
+                if isinstance(val, str) and val.strip():
+                    return _WS.sub(" ", val.strip())
+    return ""
+
+
+def _detail_for(inp: dict) -> str:
+    for key in _DETAIL_KEYS:
+        val = inp.get(key)
+        if isinstance(val, str) and val.strip():
+            return _elide(_WS.sub(" ", val.strip()))
+    nested = _questions_detail(inp)
+    if nested:
+        return _elide(nested)
+    # Anything else -- an MCP call, a tool that shipped after this list was
+    # written -- gets its first string field rather than nothing. A bare
+    # `⏵ TaskUpdate` costs a row of a 150-line window and says nothing; the
+    # same row reading `⏵ TaskUpdate: completed` is worth its space. Insertion
+    # order, which is the order the model wrote the arguments in.
+    for val in inp.values():
+        if isinstance(val, str) and val.strip():
+            return _elide(_WS.sub(" ", val.strip()))
+    return ""
+
+
 def _tool_line(block: dict) -> str | None:
     """One line for a tool call. The phone wants to know WHAT ran, not its output.
 
@@ -130,15 +200,7 @@ def _tool_line(block: dict) -> str | None:
     """
     name = block.get("name") or "tool"
     inp = block.get("input") or {}
-    detail = ""
-    if isinstance(inp, dict):
-        for key in ("command", "file_path", "pattern", "path", "url", "prompt", "query"):
-            val = inp.get(key)
-            if isinstance(val, str) and val.strip():
-                detail = _WS.sub(" ", val.strip())
-                break
-    if len(detail) > 110:
-        detail = detail[:109] + "…"
+    detail = _detail_for(inp) if isinstance(inp, dict) else ""
     return f"⏵ {name}{': ' + detail if detail else ''}"
 
 

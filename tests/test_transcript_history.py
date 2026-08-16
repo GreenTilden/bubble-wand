@@ -115,7 +115,80 @@ def test_a_paragraph_stays_one_logical_line(projects):
 def test_long_tool_input_is_truncated_not_dumped(projects):
     out = T.render([_tool("Bash", command="echo " + "y" * 500)])
     assert len(out[0]) < 140
-    assert out[0].endswith("…")
+    assert "…" in out[0]
+
+
+def test_truncation_keeps_both_ends_of_the_command(projects):
+    """Head-only truncation made a run of ssh calls unreadable: they share their
+    first 40 characters, so every line rendered the same and the part that said
+    what the call DID was the part thrown away."""
+    out = T.render([
+        _tool("Bash", command="ssh -o ConnectTimeout=25 root@somehost " + "'x' " * 40 + "docker restart pg"),
+        _tool("Bash", command="ssh -o ConnectTimeout=25 root@somehost " + "'x' " * 40 + "docker network prune"),
+    ])
+    assert out[0] != out[1], "two different commands must not render identically"
+    assert out[0].endswith("docker restart pg")
+    assert out[1].endswith("docker network prune")
+    assert all(len(line) < 140 for line in out)
+
+
+def test_a_path_keeps_its_basename(projects):
+    """The head of a file_path is the repo prefix every other line on screen shares."""
+    out = T.render([_tool("Read", file_path="/home/darney/projects/" + "deep/" * 30 + "the_actual_file.py")])
+    assert out[0].endswith("the_actual_file.py")
+
+
+def test_short_details_are_left_exactly_alone(projects):
+    """The elision must be invisible below the budget -- no stray ellipsis, no
+    reflowed spacing on the lines that were already fine."""
+    out = T.render([_tool("Bash", command="ls -la /tmp")])
+    assert out == ["⏵ Bash: ls -la /tmp"]
+
+
+# --- tools that used to render as a bare name -------------------------------
+#
+# 75 lines across the last 60 transcripts said only `⏵ TaskUpdate` / `⏵ Skill` /
+# `⏵ AskUserQuestion`, because `_tool_line` knew seven input keys and none of the
+# newer tools use them. A content-free line still costs a row of the window.
+
+
+def test_a_task_update_says_what_it_updated(projects):
+    out = T.render([_tool("TaskUpdate", taskId="abc123", status="completed",
+                          description="Port the digest to the watch")])
+    assert out == ["⏵ TaskUpdate: Port the digest to the watch"]
+
+
+def test_a_task_update_with_no_description_falls_back_to_its_status(projects):
+    """The common shape: a bare status flip. `completed` is thin, and still more
+    than the bare name it replaced."""
+    out = T.render([_tool("TaskUpdate", status="completed", taskId="abc123")])
+    assert out == ["⏵ TaskUpdate: completed"]
+
+
+def test_a_question_is_read_out_of_its_nested_list(projects):
+    out = T.render([_tool("AskUserQuestion", questions=[
+        {"question": "Which pane should the wash run on?", "header": "Pane",
+         "options": [{"label": "dev:1.3"}, {"label": "dev:1.4"}]},
+        {"question": "second question, not shown", "header": "Other"},
+    ])])
+    assert out == ["⏵ AskUserQuestion: Which pane should the wash run on?"]
+
+
+def test_a_skill_is_named(projects):
+    assert T.render([_tool("Skill", skill="brief", args="")]) == ["⏵ Skill: brief"]
+
+
+def test_an_unknown_tool_shows_its_first_string_field(projects):
+    """An MCP call, or a tool that ships after this list was written. The fallback
+    is what keeps the list from having to be exhaustive to be useful."""
+    out = T.render([_tool("mcp__claude_ai_Gmail__create_draft",
+                          to="someone@example.com", subject="Bubbles launch")])
+    assert out == ["⏵ mcp__claude_ai_Gmail__create_draft: Bubbles launch"]
+
+
+def test_a_tool_with_nothing_sayable_is_still_just_its_name(projects):
+    """No string anywhere: the name alone is the honest answer, not an invented one."""
+    assert T.render([_tool("ListAgents")]) == ["⏵ ListAgents"]
 
 
 # --- paging -----------------------------------------------------------------
