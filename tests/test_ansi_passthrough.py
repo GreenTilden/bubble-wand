@@ -22,7 +22,7 @@ DIM = "\x1b[2m"
 RESET = "\x1b[0m"
 TRUECOLOR = "\x1b[38;2;215;119;87m"
 C256 = "\x1b[38;5;208m"
-OSC_TITLE = "\x1b]0;claude — dellatech\x07"
+OSC_TITLE = "\x1b]0;claude — demo-repo\x07"
 
 BAR = "Opus 5 (1M context) · ▓▓▓▓▓▓▓░░░ 107k ctx · Σ5.8M · $2.77"
 

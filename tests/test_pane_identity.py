@@ -1,7 +1,7 @@
 """An index is not an identity — enforced at the routes, not just inside wash.
 
 WHY THIS EXISTS: tmux pane indices are POSITIONAL and are renumbered when a pane
-is killed. Proven empirically rather than inferred (della cycle-66 L17): four
+is killed. Proven empirically rather than inferred (cycle-66 L17): four
 panes %45 %46 %47 %48 at indices 1-4, kill index 2, and the pane that was index 3
 (%47) BECOMES index 2. Every route here addresses by index, so after a close or a
 split on the desktop, a phone still holding index 3 silently reads — and, worse,

@@ -2,7 +2,7 @@
 
 WHY THIS EXISTS: Claude Code runs on the terminal's ALTERNATE SCREEN, and tmux
 keeps no scrollback for the alternate screen. Measured rather than assumed
-(dellatech cycle-66 L22): `alternate_on=1` and `history_size=0` on every Claude
+(cycle-66 L22): `alternate_on=1` and `history_size=0` on every Claude
 pane, against `history_size=1624` on the one bash pane in the same session, with
 `history-limit` set to 50000 and entirely irrelevant. `capture-pane -S -` on a
 Claude pane returns exactly `pane_height` rows. So `scrollback=true` has been a

@@ -15,7 +15,7 @@ The subtle one is has_older. A short page and the top of the buffer are
 indistinguishable from outside, so the client cannot infer it — the bridge captures
 one row PAST the window, reports whether it existed, and discards it.
 
-della cycle-66 L22 · paged scrollback.
+cycle-66 L22 · paged scrollback.
 """
 import pytest
 

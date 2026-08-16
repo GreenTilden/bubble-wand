@@ -8,8 +8,8 @@ written, never wrapped by a terminal, so the client re-flows it to its own width
 
 Two things carry real risk here and both are tested hardest:
 
-  IDENTIFICATION. A cwd maps to a project DIRECTORY of many sessions (45 for
-  dellatech when this was written). Serving the wrong one is a privacy failure, not
+  IDENTIFICATION. A cwd maps to a project DIRECTORY of many sessions (45 in the
+  directory this was measured against). Serving the wrong one is a privacy failure, not
   a display glitch -- so `pick` reports its confidence and refuses "matched" on a
   tie, and the client shows that.
 
@@ -18,7 +18,7 @@ Two things carry real risk here and both are tested hardest:
   output, so matching that ignores results scores zero against the very session
   that produced it -- observed, first version. Two haystacks, one curated.
 
-della cycle-66 L22.
+cycle-66 L22.
 """
 import json
 
@@ -313,7 +313,7 @@ def test_a_torn_first_record_is_dropped_only_when_we_seeked(projects, tmp_path):
 
 # --- the memoised pick, and why a TTL alone is not enough --------------------
 #
-# della cycle-66 L23. Read-back was a TAP: one pick, ~90ms, invisible. The live
+# cycle-66 L23. Read-back was a TAP: one pick, ~90ms, invisible. The live
 # view polls the same route every 4s for as long as the phone is open, and a pick
 # re-reads up to 8 transcripts to score them. Cached -- but the invalidation is
 # the part with teeth, because a stale pick serves the wrong session, and a

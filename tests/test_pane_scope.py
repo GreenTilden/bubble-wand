@@ -6,7 +6,7 @@ therefore five threads whose print width is set by whoever attached last — a
 53-column phone divides to ~10 columns each. That width is not recoverable
 later: Claude hard-wraps its own output with real newlines at the width it had
 when it printed, so no resize, no `capture-pane -J`, and no zoom-on-read reflows
-it. Verified on a live pane (della cycle-66): every prose line ended at ≤51
+it. Verified on a live pane (cycle-66): every prose line ended at ≤51
 chars with a real newline and -J changed nothing but trailing spaces.
 
 One pane per window decouples them — tmux sizes each window independently from

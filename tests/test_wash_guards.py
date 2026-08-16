@@ -264,7 +264,7 @@ def test_autowash_when_enabled_only_touches_idle_hard_panes(env, monkeypatch):
 # before now exercised maybe_autowash, which is why nothing failed.
 
 def _prompted_pane(**over):
-    t = {"index": 2, "paneId": "%46", "command": "claude", "repo": "dellatech",
+    t = {"index": 2, "paneId": "%46", "command": "claude", "repo": "demo-repo",
          "status": "NEEDS_INPUT", "hasPrompt": True, "ctxTokens": 90_000}
     t.update(over)
     return t

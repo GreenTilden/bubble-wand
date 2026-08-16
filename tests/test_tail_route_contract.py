@@ -17,7 +17,7 @@ the general guard — it derives its expectations from `tmux.capture`'s own
 signature, so the NEXT knob added to capture and forgotten on the route fails
 here instead of shipping as a no-op.
 
-della cycle-66 L16 · found while deploying L15.
+cycle-66 L16 · found while deploying L15.
 """
 import inspect
 

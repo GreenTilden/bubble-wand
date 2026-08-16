@@ -510,7 +510,7 @@ def assert_pane_identity(index: int, expected_pane_id: str | None) -> None:
     kill index 2 of four and the pane that was 3 becomes 2. Every route here
     addresses by index, so after a split or a close on the desktop, a phone
     holding index 3 silently reads -- and TYPES INTO -- a different session.
-    Proven empirically, not inferred (della cycle-66 L17).
+    Proven empirically, not inferred (cycle-66 L17).
 
     Under a session-wide scope the same hazard has a second source: the ordinal
     is assigned across windows, so closing a WINDOW renumbers every pane after

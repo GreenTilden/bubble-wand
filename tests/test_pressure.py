@@ -41,7 +41,7 @@ def rows(path, event=None):
 
 
 def th(tokens, *, idx=1, pane="%7", status="IDLE", command="claude"):
-    return {"index": idx, "paneId": pane, "repo": "darntech", "model": "opus",
+    return {"index": idx, "paneId": pane, "repo": "demo-repo", "model": "opus",
             "ctxTokens": tokens, "ctxResolution": 1000, "ctxTier": None,
             "status": status, "command": command}
 

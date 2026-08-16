@@ -10,7 +10,7 @@ a naive `lines=150` looks like it works and quietly returns a screenshot.
 NOT the same thing as `scrollback=True`, which is `-S -` -- the entire buffer, however
 many thousand lines that happens to be.
 
-della cycle-66 L15 · catch-me-up digest.
+cycle-66 L15 · catch-me-up digest.
 """
 import inspect
 
