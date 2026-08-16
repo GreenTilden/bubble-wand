@@ -333,7 +333,7 @@ def _clear_pick_cache():
 # of these tests "passed the wrong thing".
 PANE_A = ("editing clawatch_bridge/transcript.py — pick_cached, _PICK_CACHE_MAX — "
           "running tests/test_transcript_history.py")
-PANE_B = ("household/sturkel-miniapp/static/app.js — renderHistoryLabel, "
+PANE_B = ("household/panel-miniapp/static/app.js — renderHistoryLabel, "
           "paintTranscript — running tests/test_readback_mode.py")
 
 
@@ -346,7 +346,7 @@ def _two_sessions(projects, cwd="/repo/x"):
         _result("_PICK_CACHE_MAX is 64; 25 passed"),
     ])
     b = _session(projects, cwd, "bbbb", [
-        _assistant("household/sturkel-miniapp/static/app.js — renderHistoryLabel"),
+        _assistant("household/panel-miniapp/static/app.js — renderHistoryLabel"),
         _tool("Bash", command="npm test -- tests/test_readback_mode.py"),
         _result("paintTranscript ok"),
     ])

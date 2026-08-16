@@ -49,7 +49,7 @@ def test_there_is_no_string_value_type(evlog):
 def test_unknown_field_is_rejected_in_strict_mode(evlog):
     from clawatch_bridge import events
     with pytest.raises(ValueError):
-        events.emit("wash.cleared", "fenton:1:1", attempts=1, elapsedMs=5,
+        events.emit("wash.cleared", "host:1:1", attempts=1, elapsedMs=5,
                     transcript="the user said something private")
 
 
@@ -57,7 +57,7 @@ def test_unknown_field_is_dropped_when_not_strict(evlog, monkeypatch):
     from clawatch_bridge import events
     from clawatch_bridge.config import settings
     monkeypatch.setattr(settings, "event_strict", False, raising=False)
-    events.emit("wash.cleared", "fenton:1:1", attempts=1, elapsedMs=5,
+    events.emit("wash.cleared", "host:1:1", attempts=1, elapsedMs=5,
                 transcript="the user said something private")
     row = _rows(evlog)[0]
     assert "transcript" not in row
@@ -69,10 +69,10 @@ def test_reason_is_a_closed_enum_so_exception_text_cannot_land(evlog):
     were free text, one careless reason=str(e) would put terminal content on disk."""
     from clawatch_bridge import events
     with pytest.raises(ValueError):
-        events.emit("wash.failed", "fenton:1:1",
+        events.emit("wash.failed", "host:1:1",
                     reason="tmux: /home/user/secret-thing failed", stage="CLEAR",
                     durationMs=1)
-    events.emit("wash.failed", "fenton:1:1", reason="tmux_error", stage="CLEAR",
+    events.emit("wash.failed", "host:1:1", reason="tmux_error", stage="CLEAR",
                 durationMs=1)
     assert _rows(evlog)[0]["reason"] == "tmux_error"
 
@@ -81,7 +81,7 @@ def test_model_is_slugified_not_passed_through(evlog):
     """parse_status derives `model` from an unbounded slice of a rendered line.
     Slugification bounds the blast radius if the bar parser ever mis-picks."""
     from clawatch_bridge import events
-    events.emit("nudge.fired", "fenton:1:1", paneIndex=1, level="SOFT",
+    events.emit("nudge.fired", "host:1:1", paneIndex=1, level="SOFT",
                 ctxTokens=130000, ctxResolution=1000, status="IDLE",
                 model="Opus 5 (1M context) — private client name here")
     m = _rows(evlog)[0]["model"]
@@ -96,7 +96,7 @@ def test_model_is_slugified_not_passed_through(evlog):
 def test_basename_rejects_a_path(evlog):
     from clawatch_bridge import events
     with pytest.raises(ValueError):
-        events.emit("nudge.fired", "fenton:1:1", paneIndex=1, level="SOFT",
+        events.emit("nudge.fired", "host:1:1", paneIndex=1, level="SOFT",
                     ctxTokens=1, ctxResolution=1000, status="IDLE",
                     repo="/home/user/projects/secret-project")
 
@@ -104,9 +104,9 @@ def test_basename_rejects_a_path(evlog):
 def test_envelope_is_server_generated(evlog):
     from clawatch_bridge import events
     with pytest.raises(ValueError):
-        events.emit("wash.cleared", "fenton:1:1", attempts=1, elapsedMs=1,
+        events.emit("wash.cleared", "host:1:1", attempts=1, elapsedMs=1,
                     ts="1999-01-01T00:00:00Z")
-    events.emit("wash.cleared", "fenton:1:1", attempts=1, elapsedMs=1)
+    events.emit("wash.cleared", "host:1:1", attempts=1, elapsedMs=1)
     row = _rows(evlog)[0]
     assert row["v"] == events.SCHEMA_VERSION
     assert row["ts"].startswith("20")
@@ -131,7 +131,7 @@ def test_nudge_delivered_is_refused(evlog):
 
 def test_log_file_is_0600(evlog):
     from clawatch_bridge import events
-    events.emit("wash.cleared", "fenton:1:1", attempts=1, elapsedMs=1)
+    events.emit("wash.cleared", "host:1:1", attempts=1, elapsedMs=1)
     assert oct(os.stat(evlog).st_mode & 0o777) == "0o600"
 
 
@@ -140,7 +140,7 @@ def test_oversize_line_is_dropped_with_only_a_byte_count(evlog, monkeypatch):
     from clawatch_bridge.config import settings
     monkeypatch.setattr(settings, "event_strict", False, raising=False)
     monkeypatch.setattr(events, "MAX_LINE_BYTES", 80, raising=False)
-    events.emit("nudge.fired", "fenton:1:1", paneIndex=1, level="SOFT",
+    events.emit("nudge.fired", "host:1:1", paneIndex=1, level="SOFT",
                 ctxTokens=130000, ctxResolution=1000, status="IDLE",
                 model="x" * 40, repo="some-repo")
     rows = _rows(evlog)

@@ -5,7 +5,7 @@ day and a service bounce read identically — which is a worse number than none.
 tests pin the durability, the `since` stamp that makes a cumulative total readable,
 and the rule that no accounting failure may ever break a suggestion.
 
-cycle-66 L14 · duckminster elimination-ledger v1.2 (product-embedded inference).
+cycle-66 L14 · elimination-ledger v1.2 (product-embedded inference).
 """
 import json
 import os

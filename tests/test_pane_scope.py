@@ -10,7 +10,7 @@ it. Verified on a live pane (cycle-66): every prose line ended at ≤51
 chars with a real newline and -J changed nothing but trailing spaces.
 
 One pane per window decouples them — tmux sizes each window independently from
-the clients actually viewing it, proven live on fenton where dev:1 was 200x66 and
+the clients actually viewing it, proven live on the deployed host where dev:1 was 200x66 and
 dev:2 was 189x61 in the same session at the same moment. Which is only useful if
 the bridge can see more than one window, hence this.
 
