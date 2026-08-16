@@ -26,9 +26,9 @@ from clawatch_bridge.config import settings
 
 # index -> (command, title, cwd)
 PANES = {
-    1: ("node", "claude — building", "/home/darney/projects/dellatech"),
-    2: ("node", "claude — reconciling", "/home/darney/projects/secret-project"),
-    3: ("node", "SECRET design review", "/home/darney/projects/scratch"),
+    1: ("node", "claude — building", "/home/user/projects/demo-repo"),
+    2: ("node", "claude — reconciling", "/home/user/projects/secret-project"),
+    3: ("node", "SECRET design review", "/home/user/projects/scratch"),
 }
 
 
@@ -87,7 +87,7 @@ def test_no_patterns_means_no_exclusion():
 
 
 def test_unrelated_pane_is_untouched():
-    assert not pane_filter.is_excluded({"title": "claude — building", "repo": "dellatech"},
+    assert not pane_filter.is_excluded({"title": "claude — building", "repo": "demo-repo"},
                                        ("secret", "private"))
 
 

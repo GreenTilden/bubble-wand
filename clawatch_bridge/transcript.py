@@ -61,10 +61,10 @@ _WS = re.compile(r"\s+")
 
 
 def slug_for(cwd: str) -> str:
-    """`/home/darney/projects/dellatech` -> `-home-darney-projects-dellatech`.
+    """`/home/user/projects/demo-repo` -> `-home-user-projects-demo-repo`.
 
     Both `/` and `.` become `-`, which is why a worktree path lands as
-    `...-daliquot--claude-worktrees-...` (the doubled dash is `/.`). Derived from
+    `...-demo-repo--claude-worktrees-...` (the doubled dash is `/.`). Derived from
     the live directory listing rather than from documentation.
     """
     return cwd.replace("/", "-").replace(".", "-")

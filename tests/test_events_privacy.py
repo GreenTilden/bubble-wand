@@ -70,7 +70,7 @@ def test_reason_is_a_closed_enum_so_exception_text_cannot_land(evlog):
     from clawatch_bridge import events
     with pytest.raises(ValueError):
         events.emit("wash.failed", "fenton:1:1",
-                    reason="tmux: /home/darney/secret-thing failed", stage="CLEAR",
+                    reason="tmux: /home/user/secret-thing failed", stage="CLEAR",
                     durationMs=1)
     events.emit("wash.failed", "fenton:1:1", reason="tmux_error", stage="CLEAR",
                 durationMs=1)
@@ -98,7 +98,7 @@ def test_basename_rejects_a_path(evlog):
     with pytest.raises(ValueError):
         events.emit("nudge.fired", "fenton:1:1", paneIndex=1, level="SOFT",
                     ctxTokens=1, ctxResolution=1000, status="IDLE",
-                    repo="/home/darney/projects/secret-project")
+                    repo="/home/user/projects/secret-project")
 
 
 def test_envelope_is_server_generated(evlog):

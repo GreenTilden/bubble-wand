@@ -66,9 +66,9 @@ def _session(projects, cwd, name, rows):
 
 
 def test_slug_replaces_both_slashes_and_dots():
-    """The doubled dash in a worktree slug is `/.` -- derived from the live listing,
-    where `-home-darney-projects-daliquot--claude-worktrees-...` is a real directory."""
-    assert T.slug_for("/home/darney/projects/dellatech") == "-home-darney-projects-dellatech"
+    """The doubled dash in a worktree slug is `/.` -- derived from a live listing,
+    where worktree directories really do carry the doubled dash, not from documentation."""
+    assert T.slug_for("/home/user/projects/demo-repo") == "-home-user-projects-demo-repo"
     assert T.slug_for("/home/d/p/x/.claude/worktrees/y") == "-home-d-p-x--claude-worktrees-y"
 
 
@@ -134,7 +134,7 @@ def test_truncation_keeps_both_ends_of_the_command(projects):
 
 def test_a_path_keeps_its_basename(projects):
     """The head of a file_path is the repo prefix every other line on screen shares."""
-    out = T.render([_tool("Read", file_path="/home/darney/projects/" + "deep/" * 30 + "the_actual_file.py")])
+    out = T.render([_tool("Read", file_path="/home/user/projects/" + "deep/" * 30 + "the_actual_file.py")])
     assert out[0].endswith("the_actual_file.py")
 
 
@@ -282,10 +282,10 @@ def test_a_tie_is_reported_as_a_guess_not_a_match(projects):
     'matched' there would put another pane's history under this pane's name with a
     confident label on it."""
     cwd = "/repo"
-    shared = _assistant("editing /home/darney/projects/repo/shared_module_name.py carefully")
+    shared = _assistant("editing /home/user/projects/repo/shared_module_name.py carefully")
     _session(projects, cwd, "aaa", [shared])
     _session(projects, cwd, "bbb", [shared])
-    _, conf = T.pick(cwd, "working on /home/darney/projects/repo/shared_module_name.py carefully")
+    _, conf = T.pick(cwd, "working on /home/user/projects/repo/shared_module_name.py carefully")
     assert conf == "mtime"
 
 
