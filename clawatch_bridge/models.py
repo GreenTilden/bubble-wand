@@ -227,4 +227,11 @@ class HistoryResponse(BaseModel):
     # · "none" = no transcript for this cwd at all.
     session: str | None = None
     confidence: str = "none"
+    # How many of the session's LAST lines are Claude's closing message -- 0 when
+    # the session ends on a prompt or a tool call, so this doubles as "it is your
+    # move". Counted from the end of the SESSION rather than of this page: the
+    # client prepends older pages, which shifts every index but not the end.
+    # The client cannot derive it (only a prompt's FIRST line is marked, so an
+    # unmarked line is ambiguous); see transcript.render_tagged.
+    lastTurn: int = 0
 

@@ -235,6 +235,61 @@ def test_negative_before_is_rejected(projects):
         T.page(cwd, "", lines=10, before=-1)
 
 
+# --- whose line is it: the last turn ----------------------------------------
+#
+# The client sets Claude's closing message apart so it is readable at a glance and
+# says "your move". It cannot work out which lines those are on its own -- only
+# the FIRST line of a prompt carries "▸ ", so an unmarked line is either the
+# operator's second paragraph or Claude's first, and the most ordinary exchange
+# there is (one-line prompt, one-paragraph answer) is exactly the ambiguous case.
+
+
+def test_the_closing_message_is_counted_from_the_end(projects):
+    tagged = T.render_tagged([_user("do the thing"), _assistant("para one\npara two")])
+    assert T.last_turn(tagged) == 2
+
+
+def test_a_prompt_the_operator_just_typed_is_not_a_turn(projects):
+    """The pane is working, not waiting. Its unmarked second paragraph is the
+    case a marker-reading client gets backwards."""
+    tagged = T.render_tagged([_assistant("an old answer"), _user("now do this\nand also this")])
+    assert [a for a, _ in tagged][-2:] == ["user", "user"]
+    assert T.last_turn(tagged) == 0
+
+
+def test_a_pane_mid_tool_call_is_not_waiting_on_anyone(projects):
+    tagged = T.render_tagged([_assistant("I'll check the logs."), _tool("Bash", command="ls")])
+    assert T.last_turn(tagged) == 0
+
+
+def test_the_count_stops_at_the_message_boundary(projects):
+    rows = [_assistant("older answer"), _tool("Bash", command="ls"), _result("out"),
+            _assistant("the newest answer")]
+    assert T.last_turn(T.render_tagged(rows)) == 1
+
+
+def test_render_is_exactly_the_tagged_lines(projects):
+    """render() keeps its list[str] contract; the tags are additive, not a rewrite."""
+    rows = [_user("ask"), _tool("Bash", command="ls"), _result("out"), _assistant("answer")]
+    assert T.render(rows) == [line for _, line in T.render_tagged(rows)]
+
+
+def test_page_reports_the_turn_for_the_session_not_the_window(projects):
+    """Counted from the live end even while the caller reads further back -- the
+    client prepends older pages, so its buffer still ends where the session does."""
+    _session(projects, "/repo", "s1",
+             [_assistant(f"line {i}") for i in range(40)] + [_user("q"), _assistant("the answer")])
+    _, _, live = T.page("/repo", "", lines=10, before=0)
+    _, _, back = T.page("/repo", "", lines=10, before=20)
+    assert live["last_turn"] == 1
+    assert back["last_turn"] == 1
+
+
+def test_no_transcript_reports_no_turn(projects):
+    _, _, meta = T.page("/nowhere/at/all", "", lines=10, before=0)
+    assert meta["last_turn"] == 0
+
+
 # --- identification, which is the part that can leak ------------------------
 
 

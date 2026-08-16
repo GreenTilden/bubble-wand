@@ -255,6 +255,7 @@ async def get_history(
         hasOlder=has_older,
         session=meta.get("session"),
         confidence=meta.get("confidence", "none"),
+        lastTurn=meta.get("last_turn", 0),
     )
 
 

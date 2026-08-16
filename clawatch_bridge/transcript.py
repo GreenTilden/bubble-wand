@@ -204,15 +204,17 @@ def _tool_line(block: dict) -> str | None:
     return f"⏵ {name}{': ' + detail if detail else ''}"
 
 
-def render(rows: list[dict]) -> list[str]:
-    """Transcript events -> display lines, oldest first.
+def render_tagged(rows: list[dict]) -> list[tuple[str, str]]:
+    """Transcript events -> (author, line) pairs, oldest first.
 
-    Returns LOGICAL lines: a paragraph stays one line however long. That is the
-    point of reading from here rather than from a terminal -- the client re-wraps
-    to its own width, so the same history is legible at 390px and at 200 columns,
-    which is precisely what a captured pane can never be.
+    `author` is "user", "claude" or "tool", and it is returned rather than left
+    for the client to infer BECAUSE THE MARKERS CANNOT CARRY IT: only the first
+    line of a prompt is marked, so an unmarked line is either the second
+    paragraph of what the operator typed or the first line of Claude's reply, and
+    nothing in the text tells those apart. A client that guesses gets it wrong in
+    the most common state there is -- a one-line prompt answered by a paragraph.
     """
-    out: list[str] = []
+    out: list[tuple[str, str]] = []
     for r in rows:
         kind = r.get("type")
         if kind not in ("user", "assistant"):
@@ -229,7 +231,7 @@ def render(rows: list[dict]) -> list[str]:
             if btype == "tool_use":
                 line = _tool_line(b)
                 if line:
-                    out.append(line)
+                    out.append(("tool", line))
                 continue
             if btype == "text":
                 text = (b.get("text") or "").strip()
@@ -240,9 +242,49 @@ def render(rows: list[dict]) -> list[str]:
                     para = para.rstrip()
                     if not para.strip():
                         continue
-                    out.append(f"{prefix}{para}" if prefix else para)
+                    out.append((
+                        "user" if kind == "user" else "claude",
+                        f"{prefix}{para}" if prefix else para,
+                    ))
                     prefix = ""   # only the first line of a prompt is marked
     return out
+
+
+def render(rows: list[dict]) -> list[str]:
+    """Transcript events -> display lines, oldest first.
+
+    Returns LOGICAL lines: a paragraph stays one line however long. That is the
+    point of reading from here rather than from a terminal -- the client re-wraps
+    to its own width, so the same history is legible at 390px and at 200 columns,
+    which is precisely what a captured pane can never be.
+    """
+    return [line for _, line in render_tagged(rows)]
+
+
+def last_turn(tagged: list[tuple[str, str]]) -> int:
+    """How many of the LAST lines are Claude's closing message to the operator.
+
+    0 whenever the session ends on a prompt or on a tool call -- which is what
+    makes this a usable "it is your move" signal and not merely "the newest
+    text": a pane mid-work ends on `⏵ Bash: ...`, and a pane whose operator has
+    just typed ends on their own prompt. Only a finished answer counts.
+
+    Deliberately a COUNT FROM THE END rather than a line index. The client
+    accumulates history by prepending older pages, so every absolute index it was
+    given shifts the moment it reads further back; a count of trailing lines is
+    the one form that survives that.
+
+    Tool lines stop the count instead of being absorbed into the message they
+    belong to. An assistant turn that ends in a tool call is not waiting on
+    anybody, so counting through it would put the emphasis on a pane that is
+    working -- exactly the false "answer me" this exists to avoid.
+    """
+    n = 0
+    for author, _ in reversed(tagged):
+        if author != "claude":
+            break
+        n += 1
+    return n
 
 
 def _norm(s: str) -> str:
@@ -402,19 +444,25 @@ def page(
     if before < 0:
         raise ValueError("before must be >= 0")
     path, confidence = pick_cached(cwd, pane_text, pane_key)
-    meta = {"session": path.stem if path else None, "confidence": confidence}
+    meta = {"session": path.stem if path else None, "confidence": confidence, "last_turn": 0}
     if path is None:
         return [], False, meta
     want = lines + before + 1
     budget = _TAIL_BYTES
+    tagged: list[tuple[str, str]] = []
     rendered: list[str] = []
     while True:
-        rendered = render(_read_rows(path, budget))
+        tagged = render_tagged(_read_rows(path, budget))
+        rendered = [line for _, line in tagged]
         # Grow only while there is more FILE to read: a session shorter than the
         # window is the top of its history, not an under-read.
         if len(rendered) >= want or budget >= _MAX_TAIL_BYTES or budget >= path.stat().st_size:
             break
         budget = min(budget * 4, _MAX_TAIL_BYTES)
+    # Reported for the SESSION, not for the window: it counts back from the live
+    # end, which is where the client's accumulated buffer ends however far back
+    # this particular page reaches.
+    meta["last_turn"] = last_turn(tagged)
     if before:
         rendered = rendered[:-before] if before < len(rendered) else []
     has_older = len(rendered) > lines
